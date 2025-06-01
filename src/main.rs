@@ -22,6 +22,19 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+// Application constants
+const MIN_TEXT_LENGTH: usize = 500;
+const WPM_UPDATE_INTERVAL_SECS: f64 = 1.0;
+const INITIAL_WPM_DELAY_SECS: f64 = 2.0;
+const CHARS_PER_WORD: f64 = 5.0;
+const MAX_WPM_CAP: f64 = 500.0;
+const POLL_INTERVAL_MS: u64 = 50;
+const RENDER_INTERVAL_MS: u64 = 100;
+const VISIBLE_CHAR_LIMIT: usize = 300;
+const MIN_WORD_LENGTH: usize = 3;
+const HISTORY_FILENAME: &str = ".ratatype_history.csv";
+const DICT_PATH: &str = "/usr/share/dict/words";
+
 #[derive(Parser)]
 #[command(name = "ratatype")]
 #[command(about = "A TUI-based typing test application")]
@@ -40,8 +53,19 @@ struct Args {
     use_builtin_texts: bool,
 
     /// Maximum word length when using dictionary words
-    #[arg(short = 'm', long, default_value_t = 7)]
+    #[arg(short = 'm', long, default_value_t = 7, value_parser = validate_word_length)]
     max_word_length: usize,
+}
+
+fn validate_word_length(s: &str) -> Result<usize, String> {
+    let value: usize = s.parse().map_err(|_| "Must be a positive integer")?;
+    if value < MIN_WORD_LENGTH {
+        Err(format!("Word length must be at least {}", MIN_WORD_LENGTH))
+    } else if value > 20 {
+        Err("Word length must be 20 or less".to_string())
+    } else {
+        Ok(value)
+    }
 }
 
 #[derive(Debug)]
@@ -75,6 +99,8 @@ struct App {
     use_builtin_texts: bool,
     max_word_length: usize,
     sample_texts: Vec<String>,
+    // Cache for performance
+    target_chars: Vec<char>,
 }
 
 impl App {
@@ -112,6 +138,7 @@ impl App {
             use_builtin_texts,
             max_word_length,
             sample_texts,
+            target_chars: Vec::new(),
         };
 
         app.generate_text();
@@ -126,16 +153,17 @@ impl App {
         };
 
         self.target_text = text;
-        // Initialize correction_attempts vector with false for each character
-        self.correction_attempts = vec![false; self.target_text.chars().count()];
+        // Cache character vector for performance and initialize correction_attempts
+        self.target_chars = self.target_text.chars().collect();
+        self.correction_attempts = vec![false; self.target_chars.len()];
     }
 
     fn generate_builtin_text(&self) -> String {
         let mut rng = rand::thread_rng();
         let mut text = String::new();
 
-        // Generate enough text for fast typers (aim for ~500 characters minimum)
-        while text.len() < 500 {
+        // Generate enough text for fast typers
+        while text.len() < MIN_TEXT_LENGTH {
             let sample = &self.sample_texts[rng.gen_range(0..self.sample_texts.len())];
             if !text.is_empty() {
                 text.push(' ');
@@ -156,8 +184,8 @@ impl App {
                 let mut rng = rand::thread_rng();
                 let mut text = String::new();
 
-                // Generate enough words for ~500 characters
-                while text.len() < 500 {
+                // Generate enough words
+                while text.len() < MIN_TEXT_LENGTH {
                     let word = &words[rng.gen_range(0..words.len())];
                     if !text.is_empty() {
                         text.push(' ');
@@ -167,21 +195,22 @@ impl App {
 
                 text
             }
-            Err(_) => {
-                // Fallback to built-in texts if dictionary not available
+            Err(e) => {
+                // Log warning and fallback to built-in texts if dictionary not available
+                eprintln!("Warning: Could not load dictionary from {}: {}. Using built-in texts.", DICT_PATH, e);
                 self.generate_builtin_text()
             }
         }
     }
 
     fn load_dictionary_words(&self) -> Result<Vec<String>, Box<dyn Error>> {
-        let dict_content = fs::read_to_string("/usr/share/dict/words")?;
+        let dict_content = fs::read_to_string(DICT_PATH)?;
         let words: Vec<String> = dict_content
             .lines()
             .filter(|line| {
                 let word = line.trim();
-                // Filter for reasonable words: 3 to max_word_length characters, only letters, no proper nouns
-                word.len() >= 3
+                // Filter for reasonable words: MIN_WORD_LENGTH to max_word_length characters, only letters, no proper nouns
+                word.len() >= MIN_WORD_LENGTH
                     && word.len() <= self.max_word_length
                     && word.chars().all(|c| c.is_ascii_lowercase())
             })
@@ -202,8 +231,8 @@ impl App {
 
         match key {
             KeyCode::Char(c) => {
-                if self.current_position < self.target_text.len() {
-                    let target_char = self.target_text.chars().nth(self.current_position).unwrap();
+                if self.current_position < self.target_chars.len() {
+                    let target_char = self.target_chars[self.current_position];
 
                     if self.require_correction {
                         // In correction mode, only accept the correct character
@@ -238,7 +267,7 @@ impl App {
                         }
                     }
 
-                    if self.current_position >= self.target_text.len() {
+                    if self.current_position >= self.target_chars.len() {
                         self.is_finished = true;
                     }
                 }
@@ -264,18 +293,18 @@ impl App {
             // Only update WPM if at least 1 second has passed since last update
             // and at least 2 seconds have passed since start (to avoid huge initial values)
             let should_update = if let Some(last_update) = self.last_wpm_update {
-                now.duration_since(last_update).as_secs_f64() >= 1.0
+                now.duration_since(last_update).as_secs_f64() >= WPM_UPDATE_INTERVAL_SECS
             } else {
-                elapsed_seconds >= 2.0 // Wait 2 seconds before first WPM calculation
+                elapsed_seconds >= INITIAL_WPM_DELAY_SECS
             };
 
-            if should_update && elapsed_seconds >= 2.0 {
+            if should_update && elapsed_seconds >= INITIAL_WPM_DELAY_SECS {
                 let elapsed_minutes = elapsed_seconds / 60.0;
-                let words_typed = self.current_position as f64 / 5.0; // Standard: 5 characters = 1 word
+                let words_typed = self.current_position as f64 / CHARS_PER_WORD;
                 let wpm = words_typed / elapsed_minutes;
 
-                // Cap the WPM at reasonable maximum (500 WPM is extremely fast)
-                let capped_wpm = wpm.min(500.0);
+                // Cap the WPM at reasonable maximum
+                let capped_wpm = wpm.min(MAX_WPM_CAP);
 
                 self.wpm_history.push(capped_wpm);
                 self.wpm_data_points.push((elapsed_seconds, capped_wpm));
@@ -372,7 +401,7 @@ impl App {
             env::current_dir()?
         };
 
-        path.push(".ratatype_history.csv");
+        path.push(HISTORY_FILENAME);
         Ok(path)
     }
 
@@ -387,6 +416,7 @@ impl App {
         self.total_keystrokes = 0;
         self.last_wpm_update = None;
         self.correction_attempts.clear();
+        self.target_chars.clear();
         self.generate_text();
     }
 }
@@ -429,7 +459,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
         loop {
             terminal.draw(|f| ui(f, app))?;
 
-            if event::poll(Duration::from_millis(50))? {
+            if event::poll(Duration::from_millis(POLL_INTERVAL_MS))? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
                         match key.code {
@@ -460,7 +490,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
         loop {
             terminal.draw(|f| ui(f, app))?;
 
-            if event::poll(Duration::from_millis(100))? {
+            if event::poll(Duration::from_millis(RENDER_INTERVAL_MS))? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
                         match key.code {
@@ -514,11 +544,11 @@ fn render_typing_screen(f: &mut Frame, app: &App) {
 
     // Text display - clean and minimal
     let mut spans = Vec::new();
-    let chars: Vec<char> = app.target_text.chars().collect();
+    let chars = &app.target_chars;
     let user_chars: Vec<char> = app.user_input.chars().collect();
 
     // Show text from beginning with fixed positioning - no scrolling
-    let visible_chars = 300; // Show more characters
+    let visible_chars = VISIBLE_CHAR_LIMIT;
     let end_pos = visible_chars.min(chars.len());
 
     for i in 0..end_pos {
