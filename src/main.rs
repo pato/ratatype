@@ -152,7 +152,12 @@ impl App {
         if self.current_position == 0 {
             100.0
         } else {
-            ((self.current_position - self.errors) as f64 / self.current_position as f64) * 100.0
+            let correct_chars = if self.errors > self.current_position {
+                0
+            } else {
+                self.current_position - self.errors
+            };
+            (correct_chars as f64 / self.current_position as f64) * 100.0
         }
     }
 
