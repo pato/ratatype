@@ -27,7 +27,7 @@ there was no code that wasn't written by the model).
 
 - **30-second typing tests** (customizable duration)
 - **Real-time WPM tracking** with performance graphs
-- **Dictionary words** or built-in sample texts
+- **Multiple text sources**: Google top 10k words (default), system dictionary, or built-in sample texts
 - **Error correction mode** for accuracy training
 - **Visual feedback** with color-coded characters
 - **Test history** automatically saved to CSV
@@ -56,18 +56,21 @@ ratatype -c
 # Short words only (max 5 characters)
 ratatype -m 5
 
-# Use built-in texts instead of dictionary words
-ratatype -b
+# Use system dictionary words instead of google top 10k
+ratatype -s system
+
+# Use built-in sample texts
+ratatype -s builtin
 
 # Combine options
-ratatype -d 120 -c -m 4
+ratatype -d 120 -c -s system -m 4
 ```
 
 ## Command Line Options
 
 - `-d, --duration <SECONDS>` - Test duration (default: 30)
 - `-c, --require-correction` - Must correct errors before proceeding
-- `-b, --use-builtin-texts` - Use sample texts instead of dictionary words
+- `-s, --text-source <SOURCE>` - Text source: google (top 10k words, default), system (/usr/share/dict/words), builtin (sample texts)
 - `-m, --max-word-length <LENGTH>` - Maximum word length for dictionary mode (default: 7)
 
 ## Color Coding

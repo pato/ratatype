@@ -35,6 +35,42 @@ const MIN_WORD_LENGTH: usize = 3;
 const HISTORY_FILENAME: &str = ".ratatype_history.csv";
 const DICT_PATH: &str = "/usr/share/dict/words";
 
+// Embedded word list
+const GOOGLE_10000_WORDS: &str = include_str!("../data/google-10000.txt");
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TextSource {
+    Google10k,
+    SystemDict,
+    Builtin,
+}
+
+impl std::str::FromStr for TextSource {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "google" | "google10k" | "top10k" => Ok(TextSource::Google10k),
+            "system" | "dict" | "dictionary" => Ok(TextSource::SystemDict),
+            "builtin" | "built-in" | "samples" => Ok(TextSource::Builtin),
+            _ => Err(format!(
+                "Invalid text source '{}'. Valid options: google, system, builtin",
+                s
+            )),
+        }
+    }
+}
+
+impl std::fmt::Display for TextSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            TextSource::Google10k => write!(f, "google"),
+            TextSource::SystemDict => write!(f, "system"),
+            TextSource::Builtin => write!(f, "builtin"),
+        }
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "ratatype")]
 #[command(about = "A TUI-based typing test application")]
@@ -48,9 +84,14 @@ struct Args {
     #[arg(short = 'c', long, default_value_t = false)]
     require_correction: bool,
 
-    /// Use built-in sample texts instead of random dictionary words
-    #[arg(short = 'b', long, default_value_t = false)]
-    use_builtin_texts: bool,
+    /// Text source for typing test
+    #[arg(
+        short = 's',
+        long,
+        default_value = "google",
+        help = "Text source: google (top 10k words), system (/usr/share/dict/words), builtin (sample texts)"
+    )]
+    text_source: TextSource,
 
     /// Maximum word length when using dictionary words
     #[arg(short = 'm', long, default_value_t = 7, value_parser = validate_word_length)]
@@ -96,7 +137,7 @@ struct App {
     last_wpm_update: Option<Instant>,
     require_correction: bool,
     correction_attempts: Vec<bool>, // Track which positions had errors
-    use_builtin_texts: bool,
+    text_source: TextSource,
     max_word_length: usize,
     sample_texts: Vec<String>,
     // Cache for performance
@@ -107,7 +148,7 @@ impl App {
     fn new(
         duration_secs: u64,
         require_correction: bool,
-        use_builtin_texts: bool,
+        text_source: TextSource,
         max_word_length: usize,
     ) -> App {
         let sample_texts = vec![
@@ -135,7 +176,7 @@ impl App {
             last_wpm_update: None,
             require_correction,
             correction_attempts: Vec::new(),
-            use_builtin_texts,
+            text_source,
             max_word_length,
             sample_texts,
             target_chars: Vec::new(),
@@ -146,10 +187,10 @@ impl App {
     }
 
     fn generate_text(&mut self) {
-        let text = if self.use_builtin_texts {
-            self.generate_builtin_text()
-        } else {
-            self.generate_dictionary_text()
+        let text = match self.text_source {
+            TextSource::Google10k => self.generate_google10k_text(),
+            TextSource::SystemDict => self.generate_system_dict_text(),
+            TextSource::Builtin => self.generate_builtin_text(),
         };
 
         self.target_text = text;
@@ -174,36 +215,61 @@ impl App {
         text
     }
 
-    fn generate_dictionary_text(&self) -> String {
-        match self.load_dictionary_words() {
+    fn generate_google10k_text(&self) -> String {
+        let words = self.load_google10k_words();
+        self.generate_word_text(&words)
+    }
+
+    fn generate_system_dict_text(&self) -> String {
+        match self.load_system_dict_words() {
             Ok(words) => {
                 if words.is_empty() {
                     return self.generate_builtin_text(); // Fallback
                 }
-
-                let mut rng = rand::thread_rng();
-                let mut text = String::new();
-
-                // Generate enough words
-                while text.len() < MIN_TEXT_LENGTH {
-                    let word = &words[rng.gen_range(0..words.len())];
-                    if !text.is_empty() {
-                        text.push(' ');
-                    }
-                    text.push_str(word);
-                }
-
-                text
+                self.generate_word_text(&words)
             }
             Err(e) => {
                 // Log warning and fallback to built-in texts if dictionary not available
-                eprintln!("Warning: Could not load dictionary from {}: {}. Using built-in texts.", DICT_PATH, e);
+                eprintln!(
+                    "Warning: Could not load dictionary from {}: {}. Using built-in texts.",
+                    DICT_PATH, e
+                );
                 self.generate_builtin_text()
             }
         }
     }
 
-    fn load_dictionary_words(&self) -> Result<Vec<String>, Box<dyn Error>> {
+    fn generate_word_text(&self, words: &[String]) -> String {
+        let mut rng = rand::thread_rng();
+        let mut text = String::new();
+
+        // Generate enough words
+        while text.len() < MIN_TEXT_LENGTH {
+            let word = &words[rng.gen_range(0..words.len())];
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(word);
+        }
+
+        text
+    }
+
+    fn load_google10k_words(&self) -> Vec<String> {
+        GOOGLE_10000_WORDS
+            .lines()
+            .filter(|line| {
+                let word = line.trim();
+                // Filter for reasonable words: MIN_WORD_LENGTH to max_word_length characters, only letters
+                word.len() >= MIN_WORD_LENGTH
+                    && word.len() <= self.max_word_length
+                    && word.chars().all(|c| c.is_ascii_lowercase())
+            })
+            .map(|s| s.trim().to_string())
+            .collect()
+    }
+
+    fn load_system_dict_words(&self) -> Result<Vec<String>, Box<dyn Error>> {
         let dict_content = fs::read_to_string(DICT_PATH)?;
         let words: Vec<String> = dict_content
             .lines()
@@ -349,11 +415,7 @@ impl App {
             characters_typed: self.current_position,
             errors: self.errors,
             correction_mode: self.require_correction,
-            text_source: if self.use_builtin_texts {
-                "builtin".to_string()
-            } else {
-                "dictionary".to_string()
-            },
+            text_source: self.text_source.to_string(),
             max_word_length: self.max_word_length,
         };
 
@@ -433,7 +495,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let mut app = App::new(
         args.duration,
         args.require_correction,
-        args.use_builtin_texts,
+        args.text_source,
         args.max_word_length,
     );
     let res = run_app(&mut terminal, &mut app);
