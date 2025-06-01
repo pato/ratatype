@@ -349,7 +349,7 @@ fn render_typing_screen(f: &mut Frame, app: &App) {
     // Text display - clean and minimal
     let mut spans = Vec::new();
     let chars: Vec<char> = app.target_text.chars().collect();
-    let _user_chars: Vec<char> = app.user_input.chars().collect();
+    let user_chars: Vec<char> = app.user_input.chars().collect();
 
     // Show text from beginning with fixed positioning - no scrolling
     let visible_chars = 300; // Show more characters
@@ -357,14 +357,21 @@ fn render_typing_screen(f: &mut Frame, app: &App) {
 
     for i in 0..end_pos {
         let target_char = chars[i];
-        let style = if i < app.current_position {
-            // Characters that have been successfully typed (cursor has moved past them)
-            if i < app.correction_attempts.len() && app.correction_attempts[i] {
-                // Character was typed correctly but required correction attempts
-                Style::default().fg(Color::Rgb(255, 165, 0)) // Orange
+        let style = if i < user_chars.len() {
+            // Character has been typed - compare what was typed vs what should be typed
+            let typed_char = user_chars[i];
+            if typed_char == target_char {
+                // Correct character was typed
+                if i < app.correction_attempts.len() && app.correction_attempts[i] {
+                    // Correct but required correction attempts
+                    Style::default().fg(Color::Rgb(255, 165, 0)) // Orange
+                } else {
+                    // Correct on first try
+                    Style::default().fg(Color::Green)
+                }
             } else {
-                // Character was typed correctly on first try
-                Style::default().fg(Color::Green)
+                // Wrong character was typed (only possible in normal mode)
+                Style::default().fg(Color::Red)
             }
         } else if i == app.current_position {
             // Current cursor position
