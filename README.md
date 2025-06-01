@@ -35,31 +35,32 @@ there was no code that wasn't written by the model).
 ## Installation
 
 ```bash
-git clone https://github.com/your-username/ratatype.git
+git clone https://github.com/pato/ratatype.git
 cd ratatype
 cargo build --release
+cargo install --path .
 ```
 
 ## Usage
 
 ```bash
 # Basic 30-second test
-cargo run
+ratatype
 
 # 60-second test
-cargo run -- -d 60
+ratatype -d 60
 
 # Error correction mode (must fix mistakes)
-cargo run -- -c
+ratatype -c
 
 # Short words only (max 5 characters)
-cargo run -- -m 5
+ratatype -m 5
 
 # Use built-in texts instead of dictionary words
-cargo run -- -b
+ratatype -b
 
 # Combine options
-cargo run -- -d 120 -c -m 4
+ratatype -d 120 -c -m 4
 ```
 
 ## Command Line Options
