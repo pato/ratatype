@@ -2,6 +2,8 @@
 
 A fast, minimalist typing test application for the terminal.
 
+[![asciicast](https://asciinema.org/a/721622.svg)](https://asciinema.org/a/721622)
+
 ## Developed using AI 🤖
 
 This was developed using Claude Code (with 3.5 Haiku and Sonnet 4) for a grand
