@@ -165,12 +165,6 @@ impl App {
             }
             _ => {}
         }
-
-        if let Some(start) = self.start_time {
-            if start.elapsed() >= self.test_duration {
-                self.is_finished = true;
-            }
-        }
     }
 
     fn update_wpm(&mut self) {
@@ -282,6 +276,13 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                             _ => app.handle_key_event(key.code),
                         }
                     }
+                }
+            }
+
+            // Check if time is up even without keystroke
+            if let Some(start) = app.start_time {
+                if start.elapsed() >= app.test_duration {
+                    app.is_finished = true;
                 }
             }
 
