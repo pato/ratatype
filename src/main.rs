@@ -2,21 +2,20 @@ use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
+use rand::Rng;
 use ratatui::{
+    Frame, Terminal,
     backend::{Backend, CrosstermBackend},
     layout::{Constraint, Layout},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph, Table, Row, Cell},
-    Frame, Terminal,
+    widgets::{Axis, Block, Borders, Cell, Chart, Dataset, GraphType, Paragraph, Row, Table},
 };
-use rand::Rng;
 use std::{
     error::Error,
-    fs,
-    io,
+    fs, io,
     time::{Duration, Instant},
 };
 
@@ -28,11 +27,11 @@ struct Args {
     /// Duration of the typing test in seconds
     #[arg(short, long, default_value_t = 30)]
     duration: u64,
-    
+
     /// Require errors to be corrected before proceeding
     #[arg(short = 'c', long, default_value_t = false)]
     require_correction: bool,
-    
+
     /// Use built-in sample texts instead of random dictionary words
     #[arg(short = 'b', long, default_value_t = false)]
     use_builtin_texts: bool,
@@ -68,7 +67,7 @@ impl App {
             "Two things are infinite: the universe and human stupidity; and I'm not sure about the universe and its vast mysteries.".to_string(),
             "In the midst of winter, I found there was, within me, an invincible summer that could not be defeated by any force.".to_string(),
         ];
-        
+
         let mut app = App {
             target_text: String::new(),
             user_input: String::new(),
@@ -86,27 +85,27 @@ impl App {
             use_builtin_texts,
             sample_texts,
         };
-        
+
         app.generate_text();
         app
     }
-    
+
     fn generate_text(&mut self) {
         let text = if self.use_builtin_texts {
             self.generate_builtin_text()
         } else {
             self.generate_dictionary_text()
         };
-        
+
         self.target_text = text;
         // Initialize correction_attempts vector with false for each character
         self.correction_attempts = vec![false; self.target_text.chars().count()];
     }
-    
+
     fn generate_builtin_text(&self) -> String {
         let mut rng = rand::thread_rng();
         let mut text = String::new();
-        
+
         // Generate enough text for fast typers (aim for ~500 characters minimum)
         while text.len() < 500 {
             let sample = &self.sample_texts[rng.gen_range(0..self.sample_texts.len())];
@@ -115,20 +114,20 @@ impl App {
             }
             text.push_str(sample);
         }
-        
+
         text
     }
-    
+
     fn generate_dictionary_text(&self) -> String {
         match self.load_dictionary_words() {
             Ok(words) => {
                 if words.is_empty() {
                     return self.generate_builtin_text(); // Fallback
                 }
-                
+
                 let mut rng = rand::thread_rng();
                 let mut text = String::new();
-                
+
                 // Generate enough words for ~500 characters
                 while text.len() < 500 {
                     let word = &words[rng.gen_range(0..words.len())];
@@ -137,7 +136,7 @@ impl App {
                     }
                     text.push_str(word);
                 }
-                
+
                 text
             }
             Err(_) => {
@@ -146,7 +145,7 @@ impl App {
             }
         }
     }
-    
+
     fn load_dictionary_words(&self) -> Result<Vec<String>, Box<dyn Error>> {
         let dict_content = fs::read_to_string("/usr/share/dict/words")?;
         let words: Vec<String> = dict_content
@@ -154,13 +153,11 @@ impl App {
             .filter(|line| {
                 let word = line.trim();
                 // Filter for reasonable words: 3-12 characters, only letters, no proper nouns
-                word.len() >= 3 
-                    && word.len() <= 12 
-                    && word.chars().all(|c| c.is_ascii_lowercase())
+                word.len() >= 3 && word.len() <= 12 && word.chars().all(|c| c.is_ascii_lowercase())
             })
             .map(|s| s.trim().to_string())
             .collect();
-        
+
         Ok(words)
     }
 
@@ -177,7 +174,7 @@ impl App {
             KeyCode::Char(c) => {
                 if self.current_position < self.target_text.len() {
                     let target_char = self.target_text.chars().nth(self.current_position).unwrap();
-                    
+
                     if self.require_correction {
                         // In correction mode, only accept the correct character
                         if c == target_char {
@@ -197,7 +194,7 @@ impl App {
                         // In normal mode, allow proceeding with errors
                         self.user_input.push(c);
                         self.total_keystrokes += 1;
-                        
+
                         if c == target_char {
                             self.current_position += 1;
                             self.update_wpm(); // Only update WPM on correct characters
@@ -210,7 +207,7 @@ impl App {
                             self.current_position += 1; // Move forward even with errors
                         }
                     }
-                    
+
                     if self.current_position >= self.target_text.len() {
                         self.is_finished = true;
                     }
@@ -233,23 +230,23 @@ impl App {
         if let Some(start) = self.start_time {
             let now = Instant::now();
             let elapsed_seconds = start.elapsed().as_secs_f64();
-            
+
             // Only update WPM if at least 1 second has passed since last update
             // and at least 2 seconds have passed since start (to avoid huge initial values)
             let should_update = if let Some(last_update) = self.last_wpm_update {
                 now.duration_since(last_update).as_secs_f64() >= 1.0
             } else {
-                elapsed_seconds >= 2.0  // Wait 2 seconds before first WPM calculation
+                elapsed_seconds >= 2.0 // Wait 2 seconds before first WPM calculation
             };
-            
+
             if should_update && elapsed_seconds >= 2.0 {
                 let elapsed_minutes = elapsed_seconds / 60.0;
                 let words_typed = self.current_position as f64 / 5.0; // Standard: 5 characters = 1 word
                 let wpm = words_typed / elapsed_minutes;
-                
+
                 // Cap the WPM at reasonable maximum (500 WPM is extremely fast)
                 let capped_wpm = wpm.min(500.0);
-                
+
                 self.wpm_history.push(capped_wpm);
                 self.wpm_data_points.push((elapsed_seconds, capped_wpm));
                 self.last_wpm_update = Some(now);
@@ -279,9 +276,10 @@ impl App {
     }
 
     fn get_elapsed_time(&self) -> Duration {
-        self.start_time.map_or(Duration::ZERO, |start| start.elapsed())
+        self.start_time
+            .map_or(Duration::ZERO, |start| start.elapsed())
     }
-    
+
     fn restart(&mut self) {
         self.user_input.clear();
         self.current_position = 0;
@@ -299,14 +297,18 @@ impl App {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let args = Args::parse();
-    
+
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(args.duration, args.require_correction, args.use_builtin_texts);
+    let mut app = App::new(
+        args.duration,
+        args.require_correction,
+        args.use_builtin_texts,
+    );
     let res = run_app(&mut terminal, &mut app);
 
     disable_raw_mode()?;
@@ -352,11 +354,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                 break;
             }
         }
-        
+
         // Show final results
         loop {
             terminal.draw(|f| ui(f, app))?;
-            
+
             if event::poll(Duration::from_millis(100))? {
                 if let Event::Key(key) = event::read()? {
                     if key.kind == KeyEventKind::Press {
@@ -387,11 +389,11 @@ fn render_typing_screen(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(ratatui::layout::Direction::Vertical)
         .constraints([
-            Constraint::Length(1),  // Timer
-            Constraint::Length(1),  // Spacer
-            Constraint::Min(5),     // Text area (minimalist)
-            Constraint::Length(1),  // Spacer  
-            Constraint::Length(1),  // Simple stats
+            Constraint::Length(1), // Timer
+            Constraint::Length(1), // Spacer
+            Constraint::Min(5),    // Text area (minimalist)
+            Constraint::Length(1), // Spacer
+            Constraint::Length(1), // Simple stats
         ])
         .split(f.area());
 
@@ -402,7 +404,7 @@ fn render_typing_screen(f: &mut Frame, app: &App) {
     } else {
         Duration::ZERO
     };
-    
+
     let timer_text = format!("{:.0}s", remaining.as_secs_f64());
     let timer = Paragraph::new(timer_text)
         .style(Style::default().fg(Color::Yellow))
@@ -443,7 +445,7 @@ fn render_typing_screen(f: &mut Frame, app: &App) {
             // Untyped characters
             Style::default().fg(Color::DarkGray)
         };
-        
+
         spans.push(Span::styled(target_char.to_string(), style));
     }
 
@@ -453,7 +455,11 @@ fn render_typing_screen(f: &mut Frame, app: &App) {
     f.render_widget(text_paragraph, chunks[2]);
 
     // Simple stats line
-    let stats_text = format!("WPM: {:.0} | Accuracy: {:.0}%", app.get_current_wpm(), app.get_accuracy());
+    let stats_text = format!(
+        "WPM: {:.0} | Accuracy: {:.0}%",
+        app.get_current_wpm(),
+        app.get_accuracy()
+    );
     let stats = Paragraph::new(stats_text)
         .style(Style::default().fg(Color::Cyan))
         .alignment(ratatui::layout::Alignment::Center);
@@ -464,10 +470,10 @@ fn render_summary_screen(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(ratatui::layout::Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Title
-            Constraint::Length(8),  // Stats table
-            Constraint::Min(8),     // WPM Graph
-            Constraint::Length(2),  // Instructions
+            Constraint::Length(3), // Title
+            Constraint::Length(8), // Stats table
+            Constraint::Min(8),    // WPM Graph
+            Constraint::Length(2), // Instructions
         ])
         .split(f.area());
 
@@ -486,7 +492,10 @@ fn render_summary_screen(f: &mut Frame, app: &App) {
         ]),
         Row::new(vec![
             Cell::from("Peak WPM"),
-            Cell::from(format!("{:.1}", app.wpm_history.iter().fold(0.0f64, |acc, &x| acc.max(x)))),
+            Cell::from(format!(
+                "{:.1}",
+                app.wpm_history.iter().fold(0.0f64, |acc, &x| acc.max(x))
+            )),
         ]),
         Row::new(vec![
             Cell::from("Accuracy"),
@@ -506,20 +515,25 @@ fn render_summary_screen(f: &mut Frame, app: &App) {
         ]),
     ];
 
-    let table = Table::new(rows, [Constraint::Percentage(50), Constraint::Percentage(50)])
-        .block(Block::default().borders(Borders::ALL).title("Results"))
-        .style(Style::default().fg(Color::White));
+    let table = Table::new(
+        rows,
+        [Constraint::Percentage(50), Constraint::Percentage(50)],
+    )
+    .block(Block::default().borders(Borders::ALL).title("Results"))
+    .style(Style::default().fg(Color::White));
     f.render_widget(table, chunks[1]);
 
     // WPM Graph
     if !app.wpm_data_points.is_empty() {
-        let max_wpm = app.wpm_data_points.iter()
+        let max_wpm = app
+            .wpm_data_points
+            .iter()
             .map(|(_, wpm)| *wpm)
             .fold(0.0, f64::max)
             .max(60.0);
-        
+
         let test_duration_secs = app.test_duration.as_secs_f64();
-        
+
         let dataset = Dataset::default()
             .name("WPM")
             .marker(ratatui::symbols::Marker::Braille)
@@ -528,22 +542,34 @@ fn render_summary_screen(f: &mut Frame, app: &App) {
             .data(&app.wpm_data_points);
 
         let chart = Chart::new(vec![dataset])
-            .block(Block::default().borders(Borders::ALL).title("WPM Performance"))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("WPM Performance"),
+            )
             .x_axis(
                 Axis::default()
                     .title("Time (s)")
                     .style(Style::default().fg(Color::Gray))
                     .bounds([0.0, test_duration_secs])
-                    .labels(vec![Line::from("0"), Line::from(format!("{:.0}", test_duration_secs / 2.0)), Line::from(format!("{:.0}", test_duration_secs))]),
+                    .labels(vec![
+                        Line::from("0"),
+                        Line::from(format!("{:.0}", test_duration_secs / 2.0)),
+                        Line::from(format!("{:.0}", test_duration_secs)),
+                    ]),
             )
             .y_axis(
                 Axis::default()
                     .title("WPM")
                     .style(Style::default().fg(Color::Gray))
                     .bounds([0.0, max_wpm])
-                    .labels(vec![Line::from("0"), Line::from(format!("{:.0}", max_wpm / 2.0)), Line::from(format!("{:.0}", max_wpm))]),
+                    .labels(vec![
+                        Line::from("0"),
+                        Line::from(format!("{:.0}", max_wpm / 2.0)),
+                        Line::from(format!("{:.0}", max_wpm)),
+                    ]),
             );
-        
+
         f.render_widget(chart, chunks[2]);
     }
 
