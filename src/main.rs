@@ -15,6 +15,7 @@ use ratatui::{
 use rand::Rng;
 use std::{
     error::Error,
+    fs,
     io,
     time::{Duration, Instant},
 };
@@ -31,6 +32,10 @@ struct Args {
     /// Require errors to be corrected before proceeding
     #[arg(short = 'c', long, default_value_t = false)]
     require_correction: bool,
+    
+    /// Use built-in sample texts instead of random dictionary words
+    #[arg(short = 'b', long, default_value_t = false)]
+    use_builtin_texts: bool,
 }
 
 struct App {
@@ -47,11 +52,12 @@ struct App {
     last_wpm_update: Option<Instant>,
     require_correction: bool,
     correction_attempts: Vec<bool>, // Track which positions had errors
+    use_builtin_texts: bool,
     sample_texts: Vec<String>,
 }
 
 impl App {
-    fn new(duration_secs: u64, require_correction: bool) -> App {
+    fn new(duration_secs: u64, require_correction: bool, use_builtin_texts: bool) -> App {
         let sample_texts = vec![
             "The quick brown fox jumps over the lazy dog. This pangram contains every letter of the alphabet at least once.".to_string(),
             "In a hole in the ground there lived a hobbit. Not a nasty, dirty, wet hole filled with the ends of worms and an oozy smell.".to_string(),
@@ -77,6 +83,7 @@ impl App {
             last_wpm_update: None,
             require_correction,
             correction_attempts: Vec::new(),
+            use_builtin_texts,
             sample_texts,
         };
         
@@ -85,6 +92,18 @@ impl App {
     }
     
     fn generate_text(&mut self) {
+        let text = if self.use_builtin_texts {
+            self.generate_builtin_text()
+        } else {
+            self.generate_dictionary_text()
+        };
+        
+        self.target_text = text;
+        // Initialize correction_attempts vector with false for each character
+        self.correction_attempts = vec![false; self.target_text.chars().count()];
+    }
+    
+    fn generate_builtin_text(&self) -> String {
         let mut rng = rand::thread_rng();
         let mut text = String::new();
         
@@ -97,9 +116,52 @@ impl App {
             text.push_str(sample);
         }
         
-        self.target_text = text;
-        // Initialize correction_attempts vector with false for each character
-        self.correction_attempts = vec![false; self.target_text.chars().count()];
+        text
+    }
+    
+    fn generate_dictionary_text(&self) -> String {
+        match self.load_dictionary_words() {
+            Ok(words) => {
+                if words.is_empty() {
+                    return self.generate_builtin_text(); // Fallback
+                }
+                
+                let mut rng = rand::thread_rng();
+                let mut text = String::new();
+                
+                // Generate enough words for ~500 characters
+                while text.len() < 500 {
+                    let word = &words[rng.gen_range(0..words.len())];
+                    if !text.is_empty() {
+                        text.push(' ');
+                    }
+                    text.push_str(word);
+                }
+                
+                text
+            }
+            Err(_) => {
+                // Fallback to built-in texts if dictionary not available
+                self.generate_builtin_text()
+            }
+        }
+    }
+    
+    fn load_dictionary_words(&self) -> Result<Vec<String>, Box<dyn Error>> {
+        let dict_content = fs::read_to_string("/usr/share/dict/words")?;
+        let words: Vec<String> = dict_content
+            .lines()
+            .filter(|line| {
+                let word = line.trim();
+                // Filter for reasonable words: 3-12 characters, only letters, no proper nouns
+                word.len() >= 3 
+                    && word.len() <= 12 
+                    && word.chars().all(|c| c.is_ascii_lowercase())
+            })
+            .map(|s| s.trim().to_string())
+            .collect();
+        
+        Ok(words)
     }
 
     fn handle_key_event(&mut self, key: KeyCode) {
@@ -244,7 +306,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(args.duration, args.require_correction);
+    let mut app = App::new(args.duration, args.require_correction, args.use_builtin_texts);
     let res = run_app(&mut terminal, &mut app);
 
     disable_raw_mode()?;
