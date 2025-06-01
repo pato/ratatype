@@ -228,10 +228,11 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                     if key.kind == KeyEventKind::Press {
                         match key.code {
                             KeyCode::Esc => return Ok(()),
-                            _ => {
+                            KeyCode::Enter => {
                                 app.restart();
                                 break; // Return to main typing loop
                             }
+                            _ => {} // Ignore other keys to prevent accidental dismissal
                         }
                     }
                 }
@@ -279,16 +280,11 @@ fn render_typing_screen(f: &mut Frame, app: &App) {
     let chars: Vec<char> = app.target_text.chars().collect();
     let user_chars: Vec<char> = app.user_input.chars().collect();
 
-    // Show only a window of text around current position
-    let window_size = 200;
-    let start_pos = if app.current_position > window_size / 2 {
-        app.current_position - window_size / 2
-    } else {
-        0
-    };
-    let end_pos = (start_pos + window_size).min(chars.len());
+    // Show text from beginning with fixed positioning - no scrolling
+    let visible_chars = 300; // Show more characters
+    let end_pos = visible_chars.min(chars.len());
 
-    for i in start_pos..end_pos {
+    for i in 0..end_pos {
         let target_char = chars[i];
         let style = if i < user_chars.len() {
             if user_chars[i] == target_char {
@@ -406,7 +402,7 @@ fn render_summary_screen(f: &mut Frame, app: &App) {
     }
 
     // Instructions
-    let instructions = Paragraph::new("Press ESC to exit or any other key to restart")
+    let instructions = Paragraph::new("Press ESC to exit or ENTER to restart")
         .style(Style::default().fg(Color::Yellow))
         .alignment(ratatui::layout::Alignment::Center);
     f.render_widget(instructions, chunks[3]);
