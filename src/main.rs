@@ -28,6 +28,7 @@ struct App {
     test_duration: Duration,
     is_finished: bool,
     errors: usize,
+    total_keystrokes: usize,
     sample_texts: Vec<String>,
 }
 
@@ -54,6 +55,7 @@ impl App {
             test_duration: Duration::from_secs(30),
             is_finished: false,
             errors: 0,
+            total_keystrokes: 0,
             sample_texts,
         };
         
@@ -91,14 +93,14 @@ impl App {
                 if self.current_position < self.target_text.len() {
                     let target_char = self.target_text.chars().nth(self.current_position).unwrap();
                     self.user_input.push(c);
+                    self.total_keystrokes += 1;
                     
                     if c == target_char {
                         self.current_position += 1;
+                        self.update_wpm(); // Only update WPM on correct characters
                     } else {
                         self.errors += 1;
                     }
-                    
-                    self.update_wpm();
                     
                     if self.current_position >= self.target_text.len() {
                         self.is_finished = true;
@@ -108,6 +110,7 @@ impl App {
             KeyCode::Backspace => {
                 if !self.user_input.is_empty() {
                     self.user_input.pop();
+                    self.total_keystrokes += 1;
                     if self.current_position > 0 {
                         self.current_position -= 1;
                     }
@@ -149,15 +152,11 @@ impl App {
     }
 
     fn get_accuracy(&self) -> f64 {
-        if self.current_position == 0 {
+        if self.total_keystrokes == 0 {
             100.0
         } else {
-            let correct_chars = if self.errors > self.current_position {
-                0
-            } else {
-                self.current_position - self.errors
-            };
-            (correct_chars as f64 / self.current_position as f64) * 100.0
+            let correct_keystrokes = self.total_keystrokes - self.errors;
+            (correct_keystrokes as f64 / self.total_keystrokes as f64) * 100.0
         }
     }
 
@@ -173,6 +172,7 @@ impl App {
         self.wpm_data_points.clear();
         self.is_finished = false;
         self.errors = 0;
+        self.total_keystrokes = 0;
         self.generate_text();
     }
 }
