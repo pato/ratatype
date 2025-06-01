@@ -15,8 +15,11 @@ use ratatui::{
 };
 use std::{
     error::Error,
-    fs, io,
-    time::{Duration, Instant},
+    env,
+    fs::{self, OpenOptions},
+    io::{self, Write},
+    path::PathBuf,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Parser)]
@@ -38,6 +41,20 @@ struct Args {
 
     /// Maximum word length when using dictionary words
     #[arg(short = 'm', long, default_value_t = 7)]
+    max_word_length: usize,
+}
+
+#[derive(Debug)]
+struct TestHistory {
+    timestamp: u64,
+    duration_seconds: u64,
+    avg_wpm: f64,
+    peak_wpm: f64,
+    accuracy: f64,
+    characters_typed: usize,
+    errors: usize,
+    correction_mode: bool,
+    text_source: String,
     max_word_length: usize,
 }
 
@@ -293,6 +310,65 @@ impl App {
             .map_or(Duration::ZERO, |start| start.elapsed())
     }
 
+    fn save_history(&self) -> Result<(), Box<dyn Error>> {
+        let history_record = TestHistory {
+            timestamp: SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs(),
+            duration_seconds: self.test_duration.as_secs(),
+            avg_wpm: self.get_average_wpm(),
+            peak_wpm: self.wpm_history.iter().fold(0.0f64, |acc, &x| acc.max(x)),
+            accuracy: self.get_accuracy(),
+            characters_typed: self.current_position,
+            errors: self.errors,
+            correction_mode: self.require_correction,
+            text_source: if self.use_builtin_texts { "builtin".to_string() } else { "dictionary".to_string() },
+            max_word_length: self.max_word_length,
+        };
+
+        let history_path = self.get_history_file_path()?;
+        
+        // Check if file exists to determine if we need to write header
+        let file_exists = history_path.exists();
+        
+        let mut file = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&history_path)?;
+
+        // Write CSV header if file is new
+        if !file_exists {
+            writeln!(file, "timestamp,duration_seconds,avg_wpm,peak_wpm,accuracy,characters_typed,errors,correction_mode,text_source,max_word_length")?;
+        }
+
+        // Write the record
+        writeln!(
+            file,
+            "{},{},{:.2},{:.2},{:.2},{},{},{},{},{}",
+            history_record.timestamp,
+            history_record.duration_seconds,
+            history_record.avg_wpm,
+            history_record.peak_wpm,
+            history_record.accuracy,
+            history_record.characters_typed,
+            history_record.errors,
+            history_record.correction_mode,
+            history_record.text_source,
+            history_record.max_word_length
+        )?;
+
+        Ok(())
+    }
+
+    fn get_history_file_path(&self) -> Result<PathBuf, Box<dyn Error>> {
+        let mut path = if let Ok(home) = env::var("HOME") {
+            PathBuf::from(home)
+        } else {
+            env::current_dir()?
+        };
+        
+        path.push(".ratatype_history.csv");
+        Ok(path)
+    }
+
     fn restart(&mut self) {
         self.user_input.clear();
         self.current_position = 0;
@@ -365,6 +441,10 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
             }
 
             if app.is_finished {
+                // Save test history
+                if let Err(e) = app.save_history() {
+                    eprintln!("Warning: Failed to save test history: {}", e);
+                }
                 break;
             }
         }
