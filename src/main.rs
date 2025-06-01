@@ -29,6 +29,7 @@ struct App {
     is_finished: bool,
     errors: usize,
     total_keystrokes: usize,
+    last_wpm_update: Option<Instant>,
     sample_texts: Vec<String>,
 }
 
@@ -56,6 +57,7 @@ impl App {
             is_finished: false,
             errors: 0,
             total_keystrokes: 0,
+            last_wpm_update: None,
             sample_texts,
         };
         
@@ -128,13 +130,28 @@ impl App {
 
     fn update_wpm(&mut self) {
         if let Some(start) = self.start_time {
+            let now = Instant::now();
             let elapsed_seconds = start.elapsed().as_secs_f64();
-            let elapsed_minutes = elapsed_seconds / 60.0;
-            if elapsed_minutes > 0.0 {
+            
+            // Only update WPM if at least 1 second has passed since last update
+            // and at least 2 seconds have passed since start (to avoid huge initial values)
+            let should_update = if let Some(last_update) = self.last_wpm_update {
+                now.duration_since(last_update).as_secs_f64() >= 1.0
+            } else {
+                elapsed_seconds >= 2.0  // Wait 2 seconds before first WPM calculation
+            };
+            
+            if should_update && elapsed_seconds >= 2.0 {
+                let elapsed_minutes = elapsed_seconds / 60.0;
                 let words_typed = self.current_position as f64 / 5.0; // Standard: 5 characters = 1 word
                 let wpm = words_typed / elapsed_minutes;
-                self.wpm_history.push(wpm);
-                self.wpm_data_points.push((elapsed_seconds, wpm));
+                
+                // Cap the WPM at reasonable maximum (500 WPM is extremely fast)
+                let capped_wpm = wpm.min(500.0);
+                
+                self.wpm_history.push(capped_wpm);
+                self.wpm_data_points.push((elapsed_seconds, capped_wpm));
+                self.last_wpm_update = Some(now);
             }
         }
     }
@@ -173,6 +190,7 @@ impl App {
         self.is_finished = false;
         self.errors = 0;
         self.total_keystrokes = 0;
+        self.last_wpm_update = None;
         self.generate_text();
     }
 }
