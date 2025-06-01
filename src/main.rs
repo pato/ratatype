@@ -14,8 +14,8 @@ use ratatui::{
     widgets::{Axis, Block, Borders, Cell, Chart, Dataset, GraphType, Paragraph, Row, Table},
 };
 use std::{
-    error::Error,
     env,
+    error::Error,
     fs::{self, OpenOptions},
     io::{self, Write},
     path::PathBuf,
@@ -320,15 +320,19 @@ impl App {
             characters_typed: self.current_position,
             errors: self.errors,
             correction_mode: self.require_correction,
-            text_source: if self.use_builtin_texts { "builtin".to_string() } else { "dictionary".to_string() },
+            text_source: if self.use_builtin_texts {
+                "builtin".to_string()
+            } else {
+                "dictionary".to_string()
+            },
             max_word_length: self.max_word_length,
         };
 
         let history_path = self.get_history_file_path()?;
-        
+
         // Check if file exists to determine if we need to write header
         let file_exists = history_path.exists();
-        
+
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -336,7 +340,10 @@ impl App {
 
         // Write CSV header if file is new
         if !file_exists {
-            writeln!(file, "timestamp,duration_seconds,avg_wpm,peak_wpm,accuracy,characters_typed,errors,correction_mode,text_source,max_word_length")?;
+            writeln!(
+                file,
+                "timestamp,duration_seconds,avg_wpm,peak_wpm,accuracy,characters_typed,errors,correction_mode,text_source,max_word_length"
+            )?;
         }
 
         // Write the record
@@ -364,7 +371,7 @@ impl App {
         } else {
             env::current_dir()?
         };
-        
+
         path.push(".ratatype_history.csv");
         Ok(path)
     }
