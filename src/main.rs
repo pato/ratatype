@@ -35,6 +35,10 @@ struct Args {
     /// Use built-in sample texts instead of random dictionary words
     #[arg(short = 'b', long, default_value_t = false)]
     use_builtin_texts: bool,
+
+    /// Maximum word length when using dictionary words
+    #[arg(short = 'm', long, default_value_t = 7)]
+    max_word_length: usize,
 }
 
 struct App {
@@ -52,11 +56,17 @@ struct App {
     require_correction: bool,
     correction_attempts: Vec<bool>, // Track which positions had errors
     use_builtin_texts: bool,
+    max_word_length: usize,
     sample_texts: Vec<String>,
 }
 
 impl App {
-    fn new(duration_secs: u64, require_correction: bool, use_builtin_texts: bool) -> App {
+    fn new(
+        duration_secs: u64,
+        require_correction: bool,
+        use_builtin_texts: bool,
+        max_word_length: usize,
+    ) -> App {
         let sample_texts = vec![
             "The quick brown fox jumps over the lazy dog. This pangram contains every letter of the alphabet at least once.".to_string(),
             "In a hole in the ground there lived a hobbit. Not a nasty, dirty, wet hole filled with the ends of worms and an oozy smell.".to_string(),
@@ -83,6 +93,7 @@ impl App {
             require_correction,
             correction_attempts: Vec::new(),
             use_builtin_texts,
+            max_word_length,
             sample_texts,
         };
 
@@ -152,8 +163,10 @@ impl App {
             .lines()
             .filter(|line| {
                 let word = line.trim();
-                // Filter for reasonable words: 3-12 characters, only letters, no proper nouns
-                word.len() >= 3 && word.len() <= 12 && word.chars().all(|c| c.is_ascii_lowercase())
+                // Filter for reasonable words: 3 to max_word_length characters, only letters, no proper nouns
+                word.len() >= 3
+                    && word.len() <= self.max_word_length
+                    && word.chars().all(|c| c.is_ascii_lowercase())
             })
             .map(|s| s.trim().to_string())
             .collect();
@@ -308,6 +321,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         args.duration,
         args.require_correction,
         args.use_builtin_texts,
+        args.max_word_length,
     );
     let res = run_app(&mut terminal, &mut app);
 
