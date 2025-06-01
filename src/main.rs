@@ -46,6 +46,7 @@ struct App {
     total_keystrokes: usize,
     last_wpm_update: Option<Instant>,
     require_correction: bool,
+    correction_attempts: Vec<bool>, // Track which positions had errors
     sample_texts: Vec<String>,
 }
 
@@ -75,6 +76,7 @@ impl App {
             total_keystrokes: 0,
             last_wpm_update: None,
             require_correction,
+            correction_attempts: Vec::new(),
             sample_texts,
         };
         
@@ -96,6 +98,8 @@ impl App {
         }
         
         self.target_text = text;
+        // Initialize correction_attempts vector with false for each character
+        self.correction_attempts = vec![false; self.target_text.chars().count()];
     }
 
     fn handle_key_event(&mut self, key: KeyCode) {
@@ -120,9 +124,12 @@ impl App {
                             self.current_position += 1;
                             self.update_wpm();
                         } else {
-                            // Wrong character - count as error but don't add to input
+                            // Wrong character - mark this position as needing correction
                             self.errors += 1;
                             self.total_keystrokes += 1;
+                            if self.current_position < self.correction_attempts.len() {
+                                self.correction_attempts[self.current_position] = true;
+                            }
                         }
                     } else {
                         // In normal mode, allow proceeding with errors
@@ -134,6 +141,10 @@ impl App {
                             self.update_wpm(); // Only update WPM on correct characters
                         } else {
                             self.errors += 1;
+                            // Mark this position as having had an error
+                            if self.current_position < self.correction_attempts.len() {
+                                self.correction_attempts[self.current_position] = true;
+                            }
                             self.current_position += 1; // Move forward even with errors
                         }
                     }
@@ -225,6 +236,7 @@ impl App {
         self.errors = 0;
         self.total_keystrokes = 0;
         self.last_wpm_update = None;
+        self.correction_attempts.clear();
         self.generate_text();
     }
 }
@@ -347,7 +359,13 @@ fn render_typing_screen(f: &mut Frame, app: &App) {
         let target_char = chars[i];
         let style = if i < app.current_position {
             // Characters that have been successfully typed (cursor has moved past them)
-            Style::default().fg(Color::Green)
+            if i < app.correction_attempts.len() && app.correction_attempts[i] {
+                // Character was typed correctly but required correction attempts
+                Style::default().fg(Color::Rgb(255, 165, 0)) // Orange
+            } else {
+                // Character was typed correctly on first try
+                Style::default().fg(Color::Green)
+            }
         } else if i == app.current_position {
             // Current cursor position
             Style::default().fg(Color::Black).bg(Color::White)
