@@ -1,3 +1,4 @@
+use clap::Parser;
 use crossterm::{
     event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
     execute,
@@ -18,6 +19,16 @@ use std::{
     time::{Duration, Instant},
 };
 
+#[derive(Parser)]
+#[command(name = "ratatype")]
+#[command(about = "A TUI-based typing test application")]
+#[command(version)]
+struct Args {
+    /// Duration of the typing test in seconds
+    #[arg(short, long, default_value_t = 30)]
+    duration: u64,
+}
+
 struct App {
     target_text: String,
     user_input: String,
@@ -34,7 +45,7 @@ struct App {
 }
 
 impl App {
-    fn new() -> App {
+    fn new(duration_secs: u64) -> App {
         let sample_texts = vec![
             "The quick brown fox jumps over the lazy dog. This pangram contains every letter of the alphabet at least once.".to_string(),
             "In a hole in the ground there lived a hobbit. Not a nasty, dirty, wet hole filled with the ends of worms and an oozy smell.".to_string(),
@@ -53,7 +64,7 @@ impl App {
             start_time: None,
             wpm_history: Vec::new(),
             wpm_data_points: Vec::new(),
-            test_duration: Duration::from_secs(30),
+            test_duration: Duration::from_secs(duration_secs),
             is_finished: false,
             errors: 0,
             total_keystrokes: 0,
@@ -196,13 +207,15 @@ impl App {
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let args = Args::parse();
+    
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new();
+    let mut app = App::new(args.duration);
     let res = run_app(&mut terminal, &mut app);
 
     disable_raw_mode()?;

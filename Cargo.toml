@@ -7,3 +7,4 @@ edition = "2024"
 ratatui = "0.28"
 crossterm = "0.28"
 rand = "0.8"
+clap = { version = "4.4", features = ["derive"] }
