@@ -2,6 +2,27 @@
 
 A fast, minimalist typing test application for the terminal.
 
+## Developed using AI 🤖
+
+This was developed using Claude Code (with Sonnet 4) for a grand total of
+$8.80.
+
+Every commit has alongside with it the prompt I used that generated the
+contents of the commit (with the exception of commits marked as no ai, but
+there was no code that wasn't written by the model).
+
+```
+> /cost
+  ⎿  Total cost:            $8.80
+     Total duration (API):  37m 40.6s
+     Total duration (wall): 7h 48m 27.5s
+     Total code changes:    928 lines added, 166 lines removed
+     Token usage by model:
+         claude-3-5-haiku:  261.2k input, 6.7k output, 0 cache read, 0 cache write
+            claude-sonnet:  335 input, 55.1k output, 14.9m cache read, 867.6k cache write
+```
+
+
 ## Features
 
 - **30-second typing tests** (customizable duration)
