@@ -8,7 +8,7 @@ use ratatui::{
     layout::{Constraint, Layout},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph},
+    widgets::{Axis, Block, Borders, Chart, Dataset, GraphType, Paragraph, Table, Row, Cell},
     Frame, Terminal,
 };
 use rand::Rng;
@@ -28,22 +28,24 @@ struct App {
     test_duration: Duration,
     is_finished: bool,
     errors: usize,
+    sample_texts: Vec<String>,
 }
 
 impl App {
     fn new() -> App {
         let sample_texts = vec![
-            "The quick brown fox jumps over the lazy dog. This pangram contains every letter of the alphabet at least once.",
-            "In a hole in the ground there lived a hobbit. Not a nasty, dirty, wet hole filled with the ends of worms.",
-            "To be or not to be, that is the question. Whether 'tis nobler in the mind to suffer the slings and arrows.",
-            "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness.",
+            "The quick brown fox jumps over the lazy dog. This pangram contains every letter of the alphabet at least once.".to_string(),
+            "In a hole in the ground there lived a hobbit. Not a nasty, dirty, wet hole filled with the ends of worms and an oozy smell.".to_string(),
+            "To be or not to be, that is the question. Whether 'tis nobler in the mind to suffer the slings and arrows of outrageous fortune.".to_string(),
+            "It was the best of times, it was the worst of times, it was the age of wisdom, it was the age of foolishness and doubt.".to_string(),
+            "All human beings are born free and equal in dignity and rights. They are endowed with reason and conscience.".to_string(),
+            "The only way to do great work is to love what you do. If you haven't found it yet, keep looking and don't settle.".to_string(),
+            "Two things are infinite: the universe and human stupidity; and I'm not sure about the universe and its vast mysteries.".to_string(),
+            "In the midst of winter, I found there was, within me, an invincible summer that could not be defeated by any force.".to_string(),
         ];
         
-        let mut rng = rand::thread_rng();
-        let target_text = sample_texts[rng.gen_range(0..sample_texts.len())].to_string();
-        
-        App {
-            target_text,
+        let mut app = App {
+            target_text: String::new(),
             user_input: String::new(),
             current_position: 0,
             start_time: None,
@@ -52,7 +54,27 @@ impl App {
             test_duration: Duration::from_secs(30),
             is_finished: false,
             errors: 0,
+            sample_texts,
+        };
+        
+        app.generate_text();
+        app
+    }
+    
+    fn generate_text(&mut self) {
+        let mut rng = rand::thread_rng();
+        let mut text = String::new();
+        
+        // Generate enough text for fast typers (aim for ~500 characters minimum)
+        while text.len() < 500 {
+            let sample = &self.sample_texts[rng.gen_range(0..self.sample_texts.len())];
+            if !text.is_empty() {
+                text.push(' ');
+            }
+            text.push_str(sample);
         }
+        
+        self.target_text = text;
     }
 
     fn handle_key_event(&mut self, key: KeyCode) {
@@ -137,6 +159,17 @@ impl App {
     fn get_elapsed_time(&self) -> Duration {
         self.start_time.map_or(Duration::ZERO, |start| start.elapsed())
     }
+    
+    fn restart(&mut self) {
+        self.user_input.clear();
+        self.current_position = 0;
+        self.start_time = None;
+        self.wpm_history.clear();
+        self.wpm_data_points.clear();
+        self.is_finished = false;
+        self.errors = 0;
+        self.generate_text();
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -166,32 +199,41 @@ fn main() -> Result<(), Box<dyn Error>> {
 
 fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<()> {
     loop {
-        terminal.draw(|f| ui(f, app))?;
+        // Main typing test loop
+        loop {
+            terminal.draw(|f| ui(f, app))?;
 
-        if event::poll(Duration::from_millis(50))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press {
-                    match key.code {
-                        KeyCode::Esc => return Ok(()),
-                        _ => app.handle_key_event(key.code),
+            if event::poll(Duration::from_millis(50))? {
+                if let Event::Key(key) = event::read()? {
+                    if key.kind == KeyEventKind::Press {
+                        match key.code {
+                            KeyCode::Esc => return Ok(()),
+                            _ => app.handle_key_event(key.code),
+                        }
                     }
                 }
             }
-        }
 
-        if app.is_finished {
-            break;
+            if app.is_finished {
+                break;
+            }
         }
-    }
-    
-    // Show final results
-    loop {
-        terminal.draw(|f| ui(f, app))?;
         
-        if event::poll(Duration::from_millis(100))? {
-            if let Event::Key(key) = event::read()? {
-                if key.kind == KeyEventKind::Press && key.code == KeyCode::Esc {
-                    return Ok(());
+        // Show final results
+        loop {
+            terminal.draw(|f| ui(f, app))?;
+            
+            if event::poll(Duration::from_millis(100))? {
+                if let Event::Key(key) = event::read()? {
+                    if key.kind == KeyEventKind::Press {
+                        match key.code {
+                            KeyCode::Esc => return Ok(()),
+                            _ => {
+                                app.restart();
+                                break; // Return to main typing loop
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -199,17 +241,26 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
 }
 
 fn ui(f: &mut Frame, app: &App) {
+    if app.is_finished {
+        render_summary_screen(f, app);
+    } else {
+        render_typing_screen(f, app);
+    }
+}
+
+fn render_typing_screen(f: &mut Frame, app: &App) {
     let chunks = Layout::default()
         .direction(ratatui::layout::Direction::Vertical)
         .constraints([
-            Constraint::Length(3),  // Stats
-            Constraint::Min(10),    // Text area
-            Constraint::Length(8),  // WPM Graph
-            Constraint::Length(3),  // Instructions
+            Constraint::Length(1),  // Timer
+            Constraint::Length(1),  // Spacer
+            Constraint::Min(5),     // Text area (minimalist)
+            Constraint::Length(1),  // Spacer  
+            Constraint::Length(1),  // Simple stats
         ])
         .split(f.area());
 
-    // Stats bar
+    // Simple timer display
     let elapsed = app.get_elapsed_time();
     let remaining = if elapsed < app.test_duration {
         app.test_duration - elapsed
@@ -217,60 +268,113 @@ fn ui(f: &mut Frame, app: &App) {
         Duration::ZERO
     };
     
-    let stats_text = if app.is_finished {
-        format!(
-            "Test Complete! WPM: {:.1} | Accuracy: {:.1}% | Press ESC to exit",
-            app.get_average_wpm(),
-            app.get_accuracy()
-        )
-    } else {
-        format!(
-            "Time: {:.1}s | WPM: {:.1} | Accuracy: {:.1}%",
-            remaining.as_secs_f64(),
-            app.get_current_wpm(),
-            app.get_accuracy()
-        )
-    };
+    let timer_text = format!("{:.0}s", remaining.as_secs_f64());
+    let timer = Paragraph::new(timer_text)
+        .style(Style::default().fg(Color::Yellow))
+        .alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(timer, chunks[0]);
 
-    let stats = Paragraph::new(stats_text)
-        .block(Block::default().borders(Borders::ALL).title("Stats"));
-    f.render_widget(stats, chunks[0]);
-
-    // Text display
+    // Text display - clean and minimal
     let mut spans = Vec::new();
     let chars: Vec<char> = app.target_text.chars().collect();
     let user_chars: Vec<char> = app.user_input.chars().collect();
 
-    for (i, &target_char) in chars.iter().enumerate() {
+    // Show only a window of text around current position
+    let window_size = 200;
+    let start_pos = if app.current_position > window_size / 2 {
+        app.current_position - window_size / 2
+    } else {
+        0
+    };
+    let end_pos = (start_pos + window_size).min(chars.len());
+
+    for i in start_pos..end_pos {
+        let target_char = chars[i];
         let style = if i < user_chars.len() {
-            // Typed character
             if user_chars[i] == target_char {
                 Style::default().fg(Color::Green)
             } else {
                 Style::default().fg(Color::Red)
             }
         } else if i == app.current_position {
-            // Current cursor position
-            Style::default().fg(Color::Yellow).bg(Color::DarkGray)
+            Style::default().fg(Color::Black).bg(Color::White)
         } else {
-            // Untyped characters
-            Style::default().fg(Color::Gray)
+            Style::default().fg(Color::DarkGray)
         };
         
         spans.push(Span::styled(target_char.to_string(), style));
     }
 
     let text_paragraph = Paragraph::new(Line::from(spans))
-        .block(Block::default().borders(Borders::ALL).title("Type the text below"))
-        .wrap(ratatui::widgets::Wrap { trim: true });
-    f.render_widget(text_paragraph, chunks[1]);
+        .wrap(ratatui::widgets::Wrap { trim: true })
+        .alignment(ratatui::layout::Alignment::Left);
+    f.render_widget(text_paragraph, chunks[2]);
+
+    // Simple stats line
+    let stats_text = format!("WPM: {:.0} | Accuracy: {:.0}%", app.get_current_wpm(), app.get_accuracy());
+    let stats = Paragraph::new(stats_text)
+        .style(Style::default().fg(Color::Cyan))
+        .alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(stats, chunks[4]);
+}
+
+fn render_summary_screen(f: &mut Frame, app: &App) {
+    let chunks = Layout::default()
+        .direction(ratatui::layout::Direction::Vertical)
+        .constraints([
+            Constraint::Length(3),  // Title
+            Constraint::Length(8),  // Stats table
+            Constraint::Min(8),     // WPM Graph
+            Constraint::Length(2),  // Instructions
+        ])
+        .split(f.area());
+
+    // Title
+    let title = Paragraph::new("Test Complete!")
+        .style(Style::default().fg(Color::Green))
+        .alignment(ratatui::layout::Alignment::Center)
+        .block(Block::default().borders(Borders::ALL));
+    f.render_widget(title, chunks[0]);
+
+    // Stats Table
+    let rows = vec![
+        Row::new(vec![
+            Cell::from("Average WPM"),
+            Cell::from(format!("{:.1}", app.get_average_wpm())),
+        ]),
+        Row::new(vec![
+            Cell::from("Peak WPM"),
+            Cell::from(format!("{:.1}", app.wpm_history.iter().fold(0.0f64, |acc, &x| acc.max(x)))),
+        ]),
+        Row::new(vec![
+            Cell::from("Accuracy"),
+            Cell::from(format!("{:.1}%", app.get_accuracy())),
+        ]),
+        Row::new(vec![
+            Cell::from("Characters Typed"),
+            Cell::from(format!("{}", app.current_position)),
+        ]),
+        Row::new(vec![
+            Cell::from("Errors"),
+            Cell::from(format!("{}", app.errors)),
+        ]),
+        Row::new(vec![
+            Cell::from("Test Duration"),
+            Cell::from(format!("{:.0}s", app.test_duration.as_secs())),
+        ]),
+    ];
+
+    let table = Table::new(rows, [Constraint::Percentage(50), Constraint::Percentage(50)])
+        .block(Block::default().borders(Borders::ALL).title("Results"))
+        .style(Style::default().fg(Color::White));
+    f.render_widget(table, chunks[1]);
 
     // WPM Graph
     if !app.wpm_data_points.is_empty() {
         let max_wpm = app.wpm_data_points.iter()
             .map(|(_, wpm)| *wpm)
             .fold(0.0, f64::max)
-            .max(60.0); // Minimum scale of 60 WPM
+            .max(60.0);
         
         let test_duration_secs = app.test_duration.as_secs_f64();
         
@@ -282,7 +386,7 @@ fn ui(f: &mut Frame, app: &App) {
             .data(&app.wpm_data_points);
 
         let chart = Chart::new(vec![dataset])
-            .block(Block::default().borders(Borders::ALL).title("WPM Over Time"))
+            .block(Block::default().borders(Borders::ALL).title("WPM Performance"))
             .x_axis(
                 Axis::default()
                     .title("Time (s)")
@@ -299,21 +403,11 @@ fn ui(f: &mut Frame, app: &App) {
             );
         
         f.render_widget(chart, chunks[2]);
-    } else {
-        let placeholder = Paragraph::new("WPM graph will appear here once you start typing...")
-            .block(Block::default().borders(Borders::ALL).title("WPM Over Time"))
-            .style(Style::default().fg(Color::Gray));
-        f.render_widget(placeholder, chunks[2]);
     }
 
     // Instructions
-    let instructions = if app.is_finished {
-        "Test complete! Press ESC to exit"
-    } else {
-        "Type the text above. Press ESC to quit."
-    };
-    
-    let instruction_paragraph = Paragraph::new(instructions)
-        .block(Block::default().borders(Borders::ALL).title("Instructions"));
-    f.render_widget(instruction_paragraph, chunks[3]);
+    let instructions = Paragraph::new("Press ESC to exit or any other key to restart")
+        .style(Style::default().fg(Color::Yellow))
+        .alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(instructions, chunks[3]);
 }
