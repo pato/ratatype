@@ -27,6 +27,10 @@ struct Args {
     /// Duration of the typing test in seconds
     #[arg(short, long, default_value_t = 30)]
     duration: u64,
+    
+    /// Require errors to be corrected before proceeding
+    #[arg(short = 'c', long, default_value_t = false)]
+    require_correction: bool,
 }
 
 struct App {
@@ -41,11 +45,12 @@ struct App {
     errors: usize,
     total_keystrokes: usize,
     last_wpm_update: Option<Instant>,
+    require_correction: bool,
     sample_texts: Vec<String>,
 }
 
 impl App {
-    fn new(duration_secs: u64) -> App {
+    fn new(duration_secs: u64, require_correction: bool) -> App {
         let sample_texts = vec![
             "The quick brown fox jumps over the lazy dog. This pangram contains every letter of the alphabet at least once.".to_string(),
             "In a hole in the ground there lived a hobbit. Not a nasty, dirty, wet hole filled with the ends of worms and an oozy smell.".to_string(),
@@ -69,6 +74,7 @@ impl App {
             errors: 0,
             total_keystrokes: 0,
             last_wpm_update: None,
+            require_correction,
             sample_texts,
         };
         
@@ -105,14 +111,31 @@ impl App {
             KeyCode::Char(c) => {
                 if self.current_position < self.target_text.len() {
                     let target_char = self.target_text.chars().nth(self.current_position).unwrap();
-                    self.user_input.push(c);
-                    self.total_keystrokes += 1;
                     
-                    if c == target_char {
-                        self.current_position += 1;
-                        self.update_wpm(); // Only update WPM on correct characters
+                    if self.require_correction {
+                        // In correction mode, only accept the correct character
+                        if c == target_char {
+                            self.user_input.push(c);
+                            self.total_keystrokes += 1;
+                            self.current_position += 1;
+                            self.update_wpm();
+                        } else {
+                            // Wrong character - count as error but don't add to input
+                            self.errors += 1;
+                            self.total_keystrokes += 1;
+                        }
                     } else {
-                        self.errors += 1;
+                        // In normal mode, allow proceeding with errors
+                        self.user_input.push(c);
+                        self.total_keystrokes += 1;
+                        
+                        if c == target_char {
+                            self.current_position += 1;
+                            self.update_wpm(); // Only update WPM on correct characters
+                        } else {
+                            self.errors += 1;
+                            self.current_position += 1; // Move forward even with errors
+                        }
                     }
                     
                     if self.current_position >= self.target_text.len() {
@@ -215,7 +238,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut app = App::new(args.duration);
+    let mut app = App::new(args.duration, args.require_correction);
     let res = run_app(&mut terminal, &mut app);
 
     disable_raw_mode()?;
@@ -314,7 +337,7 @@ fn render_typing_screen(f: &mut Frame, app: &App) {
     // Text display - clean and minimal
     let mut spans = Vec::new();
     let chars: Vec<char> = app.target_text.chars().collect();
-    let user_chars: Vec<char> = app.user_input.chars().collect();
+    let _user_chars: Vec<char> = app.user_input.chars().collect();
 
     // Show text from beginning with fixed positioning - no scrolling
     let visible_chars = 300; // Show more characters
@@ -322,15 +345,14 @@ fn render_typing_screen(f: &mut Frame, app: &App) {
 
     for i in 0..end_pos {
         let target_char = chars[i];
-        let style = if i < user_chars.len() {
-            if user_chars[i] == target_char {
-                Style::default().fg(Color::Green)
-            } else {
-                Style::default().fg(Color::Red)
-            }
+        let style = if i < app.current_position {
+            // Characters that have been successfully typed (cursor has moved past them)
+            Style::default().fg(Color::Green)
         } else if i == app.current_position {
+            // Current cursor position
             Style::default().fg(Color::Black).bg(Color::White)
         } else {
+            // Untyped characters
             Style::default().fg(Color::DarkGray)
         };
         
