@@ -4,8 +4,8 @@ A fast, minimalist typing test application for the terminal.
 
 ## Developed using AI 🤖
 
-This was developed using Claude Code (with Sonnet 4) for a grand total of
-$8.80.
+This was developed using Claude Code (with 3.5 Haiku and Sonnet 4) for a grand
+total of $15.
 
 Every commit has alongside with it the prompt I used that generated the
 contents of the commit (with the exception of commits marked as no ai, but
@@ -13,13 +13,13 @@ there was no code that wasn't written by the model).
 
 ```
 > /cost
-  ⎿  Total cost:            $8.80
-     Total duration (API):  37m 40.6s
-     Total duration (wall): 7h 48m 27.5s
-     Total code changes:    928 lines added, 166 lines removed
+  ⎿  Total cost:            $14.14
+     Total duration (API):  47m 58.7s
+     Total duration (wall): 8h 34m 55.9s
+     Total code changes:    1080 lines added, 234 lines removed
      Token usage by model:
-         claude-3-5-haiku:  261.2k input, 6.7k output, 0 cache read, 0 cache write
-            claude-sonnet:  335 input, 55.1k output, 14.9m cache read, 867.6k cache write
+         claude-3-5-haiku:  287.7k input, 7.4k output, 0 cache read, 0 cache write
+            claude-sonnet:  488 input, 74.3k output, 24.7m cache read, 1.4m cache write
 ```
 
 
