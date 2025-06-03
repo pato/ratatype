@@ -2,6 +2,11 @@
 name = "ratatype"
 version = "0.1.0"
 edition = "2024"
+authors = ["Pato Lankenau <rust@p.lankenau.io>"]
+license = "MIT"
+description = "A fast, minimalist yet feature packed typing test application for the terminal."
+keywords = ["tui", "cli", "typing", "keyboard", "wpm"]
+repository = "https://github.com/pato/ratatype"
 
 [dependencies]
 ratatui = "0.28"
