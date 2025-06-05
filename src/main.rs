@@ -14,6 +14,7 @@ use ratatui::{
     widgets::{Axis, Block, Borders, Cell, Chart, Dataset, GraphType, Paragraph, Row, Table},
 };
 use std::{
+    collections::HashMap,
     env,
     error::Error,
     fs::{self, OpenOptions},
@@ -123,6 +124,30 @@ struct TestHistory {
     max_word_length: usize,
 }
 
+#[derive(Debug, Clone)]
+struct KeyMetrics {
+    times: Vec<Duration>,
+    errors: usize,
+}
+
+impl KeyMetrics {
+    fn new() -> Self {
+        Self {
+            times: Vec::new(),
+            errors: 0,
+        }
+    }
+
+    fn average_time(&self) -> Option<Duration> {
+        if self.times.is_empty() {
+            None
+        } else {
+            let total_nanos: u64 = self.times.iter().map(|d| d.as_nanos() as u64).sum();
+            Some(Duration::from_nanos(total_nanos / self.times.len() as u64))
+        }
+    }
+}
+
 struct App {
     target_text: String,
     user_input: String,
@@ -142,6 +167,10 @@ struct App {
     sample_texts: Vec<String>,
     // Cache for performance
     target_chars: Vec<char>,
+    // Key analytics tracking
+    key_metrics: HashMap<char, KeyMetrics>,
+    last_keystroke_time: Option<Instant>,
+    current_key_start_time: Option<Instant>,
 }
 
 impl App {
@@ -180,10 +209,20 @@ impl App {
             max_word_length,
             sample_texts,
             target_chars: Vec::new(),
+            key_metrics: HashMap::new(),
+            last_keystroke_time: None,
+            current_key_start_time: None,
         };
 
         app.generate_text();
+        app.start_timing_current_key();
         app
+    }
+
+    fn start_timing_current_key(&mut self) {
+        if self.current_position < self.target_chars.len() {
+            self.current_key_start_time = Some(Instant::now());
+        }
     }
 
     fn generate_text(&mut self) {
@@ -293,12 +332,27 @@ impl App {
 
         if self.start_time.is_none() {
             self.start_time = Some(Instant::now());
+            self.last_keystroke_time = Some(Instant::now());
+            self.start_timing_current_key();
         }
+
+        let now = Instant::now();
 
         match key {
             KeyCode::Char(c) => {
                 if self.current_position < self.target_chars.len() {
                     let target_char = self.target_chars[self.current_position];
+
+                    // Record timing data only when we get the target character (correct or as an attempt)
+                    if let Some(key_start_time) = self.current_key_start_time {
+                        let key_response_time = now.duration_since(key_start_time);
+                        // Always record timing for target character attempts
+                        self.key_metrics
+                            .entry(target_char)
+                            .or_insert_with(KeyMetrics::new)
+                            .times
+                            .push(key_response_time);
+                    }
 
                     if self.require_correction {
                         // In correction mode, only accept the correct character
@@ -306,14 +360,20 @@ impl App {
                             self.user_input.push(c);
                             self.total_keystrokes += 1;
                             self.current_position += 1;
+                            self.start_timing_current_key(); // Start timing next key
                             self.update_wpm();
                         } else {
-                            // Wrong character - mark this position as needing correction
+                            // Wrong character - mark this position as needing correction and track error
                             self.errors += 1;
                             self.total_keystrokes += 1;
+                            self.key_metrics
+                                .entry(target_char)
+                                .or_insert_with(KeyMetrics::new)
+                                .errors += 1;
                             if self.current_position < self.correction_attempts.len() {
                                 self.correction_attempts[self.current_position] = true;
                             }
+                            // Don't start timing next key yet - stay on current key until correct
                         }
                     } else {
                         // In normal mode, allow proceeding with errors
@@ -322,16 +382,24 @@ impl App {
 
                         if c == target_char {
                             self.current_position += 1;
+                            self.start_timing_current_key(); // Start timing next key
                             self.update_wpm(); // Only update WPM on correct characters
                         } else {
                             self.errors += 1;
+                            self.key_metrics
+                                .entry(target_char)
+                                .or_insert_with(KeyMetrics::new)
+                                .errors += 1;
                             // Mark this position as having had an error
                             if self.current_position < self.correction_attempts.len() {
                                 self.correction_attempts[self.current_position] = true;
                             }
                             self.current_position += 1; // Move forward even with errors
+                            self.start_timing_current_key(); // Start timing next key
                         }
                     }
+
+                    self.last_keystroke_time = Some(now);
 
                     if self.current_position >= self.target_chars.len() {
                         self.is_finished = true;
@@ -344,8 +412,10 @@ impl App {
                     self.total_keystrokes += 1;
                     if self.current_position > 0 {
                         self.current_position -= 1;
+                        self.start_timing_current_key(); // Start timing the key we're now on
                     }
                 }
+                self.last_keystroke_time = Some(now);
             }
             _ => {}
         }
@@ -479,7 +549,67 @@ impl App {
         self.last_wpm_update = None;
         self.correction_attempts.clear();
         self.target_chars.clear();
+        self.key_metrics.clear();
+        self.last_keystroke_time = None;
+        self.current_key_start_time = None;
         self.generate_text();
+        self.start_timing_current_key();
+    }
+
+    fn get_fastest_keys(&self, count: usize) -> Vec<(char, Duration)> {
+        let mut key_times: Vec<(char, Duration)> = self
+            .key_metrics
+            .iter()
+            .filter_map(|(key, metrics)| metrics.average_time().map(|avg_time| (*key, avg_time)))
+            .collect();
+
+        key_times.sort_by_key(|(_, time)| *time);
+        key_times.into_iter().take(count).collect()
+    }
+
+    fn get_slowest_keys(&self, count: usize) -> Vec<(char, Duration)> {
+        let mut key_times: Vec<(char, Duration)> = self
+            .key_metrics
+            .iter()
+            .filter_map(|(key, metrics)| metrics.average_time().map(|avg_time| (*key, avg_time)))
+            .collect();
+
+        key_times.sort_by_key(|(_, time)| std::cmp::Reverse(*time));
+        key_times.into_iter().take(count).collect()
+    }
+
+
+    fn get_most_error_prone_keys(&self, count: usize) -> Vec<(char, usize)> {
+        let mut key_errors: Vec<(char, usize)> = self
+            .key_metrics
+            .iter()
+            .filter(|(_, metrics)| metrics.errors > 0)
+            .map(|(key, metrics)| (*key, metrics.errors))
+            .collect();
+
+        key_errors.sort_by_key(|(_, errors)| std::cmp::Reverse(*errors));
+        key_errors.into_iter().take(count).collect()
+    }
+
+    fn get_most_accurate_keys(&self, count: usize) -> Vec<(char, f64)> {
+        let mut key_accuracy: Vec<(char, f64)> = self
+            .key_metrics
+            .iter()
+            .filter_map(|(key, metrics)| {
+                if !metrics.times.is_empty() {
+                    let total_attempts = metrics.times.len();
+                    let accuracy =
+                        (total_attempts - metrics.errors) as f64 / total_attempts as f64 * 100.0;
+                    Some((*key, accuracy))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        key_accuracy
+            .sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
+        key_accuracy.into_iter().take(count).collect()
     }
 }
 
@@ -665,7 +795,8 @@ fn render_summary_screen(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(3), // Title
             Constraint::Length(8), // Stats table
-            Constraint::Min(8),    // WPM Graph
+            Constraint::Length(12), // Key analytics (increased from 8)
+            Constraint::Min(6),    // WPM Graph (smaller)
             Constraint::Length(2), // Instructions
         ])
         .split(f.area());
@@ -716,7 +847,92 @@ fn render_summary_screen(f: &mut Frame, app: &App) {
     .style(Style::default().fg(Color::White));
     f.render_widget(table, chunks[1]);
 
-    // WPM Graph
+    // Key Analytics Section
+    let key_analytics_chunks = Layout::default()
+        .direction(ratatui::layout::Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage(50), // Fastest/Slowest keys
+            Constraint::Percentage(50), // Most/Least error-prone keys
+        ])
+        .split(chunks[2]);
+
+    // Fastest and Slowest Keys
+    let fastest_keys = app.get_fastest_keys(3);
+    let slowest_keys = app.get_slowest_keys(3);
+
+    let mut speed_rows = vec![Row::new(vec![
+        Cell::from("Fastest Keys"),
+        Cell::from("Time (ms)"),
+    ])];
+    if fastest_keys.is_empty() {
+        speed_rows.push(Row::new(vec![Cell::from("No data"), Cell::from("-")]));
+    } else {
+        for (key, time) in fastest_keys {
+            speed_rows.push(Row::new(vec![
+                Cell::from(format!("'{}'", key)),
+                Cell::from(format!("{}", time.as_millis())),
+            ]));
+        }
+    }
+    speed_rows.push(Row::new(vec![Cell::from(""), Cell::from("")])); // Spacer
+    speed_rows.push(Row::new(vec![
+        Cell::from("Slowest Keys"),
+        Cell::from("Time (ms)"),
+    ]));
+    if slowest_keys.is_empty() {
+        speed_rows.push(Row::new(vec![Cell::from("No data"), Cell::from("-")]));
+    } else {
+        for (key, time) in slowest_keys {
+            speed_rows.push(Row::new(vec![
+                Cell::from(format!("'{}'", key)),
+                Cell::from(format!("{}", time.as_millis())),
+            ]));
+        }
+    }
+
+    let speed_table = Table::new(
+        speed_rows,
+        [Constraint::Percentage(60), Constraint::Percentage(40)],
+    )
+    .block(Block::default().borders(Borders::ALL).title("Key Speed"))
+    .style(Style::default().fg(Color::White));
+    f.render_widget(speed_table, key_analytics_chunks[0]);
+
+    // Most Error-Prone and Most Accurate Keys
+    let error_prone_keys = app.get_most_error_prone_keys(3);
+    let accurate_keys = app.get_most_accurate_keys(3);
+
+    let mut accuracy_rows = vec![Row::new(vec![
+        Cell::from("Problem Keys"),
+        Cell::from("Errors"),
+    ])];
+    for (key, errors) in error_prone_keys {
+        accuracy_rows.push(Row::new(vec![
+            Cell::from(format!("'{}'", key)),
+            Cell::from(format!("{}", errors)),
+        ]));
+    }
+    accuracy_rows.push(Row::new(vec![Cell::from(""), Cell::from("")])); // Spacer
+    accuracy_rows.push(Row::new(vec![
+        Cell::from("Best Keys"),
+        Cell::from("Accuracy"),
+    ]));
+    for (key, accuracy) in accurate_keys {
+        accuracy_rows.push(Row::new(vec![
+            Cell::from(format!("'{}'", key)),
+            Cell::from(format!("{:.0}%", accuracy)),
+        ]));
+    }
+
+    let accuracy_table = Table::new(
+        accuracy_rows,
+        [Constraint::Percentage(60), Constraint::Percentage(40)],
+    )
+    .block(Block::default().borders(Borders::ALL).title("Key Accuracy"))
+    .style(Style::default().fg(Color::White));
+    f.render_widget(accuracy_table, key_analytics_chunks[1]);
+
+    // WPM Graph (smaller now)
     if !app.wpm_data_points.is_empty() {
         let max_wpm = app
             .wpm_data_points
@@ -763,12 +979,12 @@ fn render_summary_screen(f: &mut Frame, app: &App) {
                     ]),
             );
 
-        f.render_widget(chart, chunks[2]);
+        f.render_widget(chart, chunks[3]);
     }
 
     // Instructions
     let instructions = Paragraph::new("Press ESC to exit or ENTER to restart")
         .style(Style::default().fg(Color::Yellow))
         .alignment(ratatui::layout::Alignment::Center);
-    f.render_widget(instructions, chunks[3]);
+    f.render_widget(instructions, chunks[4]);
 }
