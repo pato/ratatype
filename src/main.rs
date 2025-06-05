@@ -611,6 +611,82 @@ impl App {
             .sort_by(|(_, a), (_, b)| b.partial_cmp(a).unwrap_or(std::cmp::Ordering::Equal));
         key_accuracy.into_iter().take(count).collect()
     }
+
+    fn get_key_performance_color(&self, key: char) -> Color {
+        if let Some(metrics) = self.key_metrics.get(&key) {
+            if let Some(avg_time) = metrics.average_time() {
+                // Calculate all average times to determine relative performance
+                let all_times: Vec<Duration> = self.key_metrics
+                    .values()
+                    .filter_map(|m| m.average_time())
+                    .collect();
+                
+                if all_times.len() < 2 {
+                    return Color::Gray; // Not enough data
+                }
+                
+                let min_time = all_times.iter().min().unwrap();
+                let max_time = all_times.iter().max().unwrap();
+                let time_range = max_time.as_millis() - min_time.as_millis();
+                
+                if time_range == 0 {
+                    return Color::Gray; // All times are the same
+                }
+                
+                // Calculate relative position (0.0 = fastest, 1.0 = slowest)
+                let relative_pos = (avg_time.as_millis() - min_time.as_millis()) as f64 / time_range as f64;
+                
+                // Map to colors: green for fast, red for slow
+                if relative_pos < 0.33 {
+                    // Fast keys (green shades)
+                    if relative_pos < 0.16 {
+                        Color::Green // Fastest
+                    } else {
+                        Color::Rgb(144, 238, 144) // Light green
+                    }
+                } else if relative_pos < 0.67 {
+                    // Medium keys (yellow/white)
+                    Color::Yellow
+                } else {
+                    // Slow keys (red shades)
+                    if relative_pos > 0.83 {
+                        Color::Red // Slowest
+                    } else {
+                        Color::Rgb(255, 99, 71) // Light red
+                    }
+                }
+            } else {
+                Color::Gray // No timing data
+            }
+        } else {
+            Color::DarkGray // Key not used
+        }
+    }
+
+    fn render_keyboard(&self) -> Vec<Line> {
+        // Standard QWERTY layout
+        let keyboard_rows = vec![
+            "1234567890",
+            "qwertyuiop", 
+            "asdfghjkl",
+            "zxcvbnm"
+        ];
+        
+        let mut lines = Vec::new();
+        
+        for row in keyboard_rows {
+            let mut spans = Vec::new();
+            
+            for ch in row.chars() {
+                let color = self.get_key_performance_color(ch);
+                spans.push(Span::styled(format!(" {} ", ch), Style::default().fg(color).bg(Color::Black)));
+            }
+            
+            lines.push(Line::from(spans));
+        }
+        
+        lines
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -795,8 +871,9 @@ fn render_summary_screen(f: &mut Frame, app: &App) {
         .constraints([
             Constraint::Length(3), // Title
             Constraint::Length(8), // Stats table
-            Constraint::Length(12), // Key analytics (increased from 8)
-            Constraint::Min(6),    // WPM Graph (smaller)
+            Constraint::Length(12), // Key analytics
+            Constraint::Length(7), // Keyboard visualization
+            Constraint::Min(4),    // WPM Graph (smaller)
             Constraint::Length(2), // Instructions
         ])
         .split(f.area());
@@ -932,6 +1009,17 @@ fn render_summary_screen(f: &mut Frame, app: &App) {
     .style(Style::default().fg(Color::White));
     f.render_widget(accuracy_table, key_analytics_chunks[1]);
 
+    // Keyboard Visualization
+    let keyboard_lines = app.render_keyboard();
+    let mut keyboard_content = Vec::new();
+    keyboard_content.push(Line::from(Span::styled("Key Performance (Green=Fast, Red=Slow):", Style::default().fg(Color::White))));
+    keyboard_content.extend(keyboard_lines);
+    
+    let keyboard_paragraph = Paragraph::new(keyboard_content)
+        .block(Block::default().borders(Borders::ALL).title("Keyboard Heatmap"))
+        .alignment(ratatui::layout::Alignment::Center);
+    f.render_widget(keyboard_paragraph, chunks[3]);
+
     // WPM Graph (smaller now)
     if !app.wpm_data_points.is_empty() {
         let max_wpm = app
@@ -979,12 +1067,12 @@ fn render_summary_screen(f: &mut Frame, app: &App) {
                     ]),
             );
 
-        f.render_widget(chart, chunks[3]);
+        f.render_widget(chart, chunks[4]);
     }
 
     // Instructions
     let instructions = Paragraph::new("Press ESC to exit or ENTER to restart")
         .style(Style::default().fg(Color::Yellow))
         .alignment(ratatui::layout::Alignment::Center);
-    f.render_widget(instructions, chunks[4]);
+    f.render_widget(instructions, chunks[5]);
 }
