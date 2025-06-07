@@ -29,6 +29,9 @@ const WPM_UPDATE_INTERVAL_SECS: f64 = 1.0;
 const INITIAL_WPM_DELAY_SECS: f64 = 2.0;
 const CHARS_PER_WORD: f64 = 5.0;
 const MAX_WPM_CAP: f64 = 500.0;
+// Text scaling constants
+const ASSUMED_AVG_WPM: f64 = 150.0;
+const TEXT_BUFFER_MULTIPLIER: f64 = 10.0;
 const POLL_INTERVAL_MS: u64 = 50;
 const RENDER_INTERVAL_MS: u64 = 100;
 const VISIBLE_CHAR_LIMIT: usize = 300;
@@ -225,6 +228,17 @@ impl App {
         }
     }
 
+    fn calculate_required_text_length(&self) -> usize {
+        // Calculate characters needed based on test duration and expected typing speed
+        let test_duration = self.test_duration.as_secs_f64();
+        let words_per_sec = ASSUMED_AVG_WPM * 60.0;
+        let chars_needed =
+            (words_per_sec * CHARS_PER_WORD * test_duration * TEXT_BUFFER_MULTIPLIER) as usize;
+
+        // Ensure we have at least the minimum length
+        chars_needed.max(MIN_TEXT_LENGTH)
+    }
+
     fn generate_text(&mut self) {
         let text = match self.text_source {
             TextSource::Google10k => self.generate_google10k_text(),
@@ -232,6 +246,7 @@ impl App {
             TextSource::Builtin => self.generate_builtin_text(),
         };
 
+        dbg!(&text.len());
         self.target_text = text;
         // Cache character vector for performance and initialize correction_attempts
         self.target_chars = self.target_text.chars().collect();
@@ -241,9 +256,10 @@ impl App {
     fn generate_builtin_text(&self) -> String {
         let mut rng = rand::thread_rng();
         let mut text = String::new();
+        let required_length = self.calculate_required_text_length();
 
-        // Generate enough text for fast typers
-        while text.len() < MIN_TEXT_LENGTH {
+        // Generate enough text for the test duration
+        while text.len() < required_length {
             let sample = &self.sample_texts[rng.gen_range(0..self.sample_texts.len())];
             if !text.is_empty() {
                 text.push(' ');
@@ -281,9 +297,9 @@ impl App {
     fn generate_word_text(&self, words: &[String]) -> String {
         let mut rng = rand::thread_rng();
         let mut text = String::new();
+        let required_length = self.calculate_required_text_length();
 
-        // Generate enough words
-        while text.len() < MIN_TEXT_LENGTH {
+        while text.len() < required_length {
             let word = &words[rng.gen_range(0..words.len())];
             if !text.is_empty() {
                 text.push(' ');
