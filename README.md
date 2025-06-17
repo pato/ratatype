@@ -29,7 +29,8 @@ there was no code that wasn't written by the model).
 
 - **30-second typing tests** (customizable duration)
 - **Real-time WPM tracking** with performance graphs
-- **Multiple text sources**: Google top 10k words (default), system dictionary, or built-in sample texts
+- **Multiple text sources**: Google top 10k words (default), system dictionary, built-in sample texts, or **code files**
+- **Code typing practice** - Load any source code file to practice programming
 - **Error correction mode** for accuracy training
 - **Visual feedback** with color-coded characters
 - **Test history** automatically saved to CSV
@@ -64,6 +65,9 @@ ratatype -s system
 # Use built-in sample texts
 ratatype -s builtin
 
+# Practice typing code from a file
+ratatype -s program.ml
+
 # Combine options
 ratatype -d 120 -c -s system -m 4
 ```
@@ -72,12 +76,25 @@ ratatype -d 120 -c -s system -m 4
 
 - `-d, --duration <SECONDS>` - Test duration (default: 30)
 - `-c, --require-correction` - Must correct errors before proceeding
-- `-s, --text-source <SOURCE>` - Text source: google (top 10k words, default), system (/usr/share/dict/words), builtin (sample texts)
+- `-s, --text-source <SOURCE>` - Text source: google (top 10k words, default), system (/usr/share/dict/words), builtin (sample texts), or path to a code file
 - `-m, --max-word-length <LENGTH>` - Maximum word length for dictionary mode (default: 7)
+
+## Code Typing Mode
+
+When using a code file as the text source:
+- The application extracts functions and meaningful code sections
+- Code structure and formatting are preserved (no word randomization)
+- Sections are selected randomly to keep practice varied
+- **Full newline support** - press Enter to match line breaks in code
+- **Smart indentation** - automatically skips leading whitespace, cursor starts at first meaningful character
+- Multi-line display with proper code formatting
+- Leading whitespace shown dimmed to maintain visual structure
+- Supports multiple programming languages (Rust, Python, JavaScript, Go, OCaml, Java, C#, etc.)
 
 ## Color Coding
 
 - **Green**: Correctly typed characters
+- **Dimmed Green**: Auto-skipped leading whitespace (code mode only)
 - **Orange**: Corrected characters (had errors but fixed)
 - **Red**: Wrong characters (normal mode only)
 - **White**: Current cursor position
@@ -93,8 +110,8 @@ Test results are automatically saved to `~/.ratatype_history.csv` with:
 
 - **Type** to take the test
 - **Backspace** to correct mistakes
+- **Enter** to match newlines in code mode, or restart after test completion
 - **ESC** to quit
-- **Enter** to restart after test completion
 
 ## Requirements
 

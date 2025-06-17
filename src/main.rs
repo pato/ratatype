@@ -42,23 +42,30 @@ const DICT_PATH: &str = "/usr/share/dict/words";
 // Embedded word list
 const GOOGLE_10000_WORDS: &str = include_str!("../data/google-10000.txt");
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 enum TextSource {
     Google10k,
     SystemDict,
     Builtin,
+    File(PathBuf),
 }
 
 impl std::str::FromStr for TextSource {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
+        // Check if it's a file path first
+        let path = PathBuf::from(s);
+        if path.exists() && path.is_file() {
+            return Ok(TextSource::File(path));
+        }
+
         match s.to_lowercase().as_str() {
             "google" | "google10k" | "top10k" => Ok(TextSource::Google10k),
             "system" | "dict" | "dictionary" => Ok(TextSource::SystemDict),
             "builtin" | "built-in" | "samples" => Ok(TextSource::Builtin),
             _ => Err(format!(
-                "Invalid text source '{}'. Valid options: google, system, builtin",
+                "Invalid text source '{}'. Valid options: google, system, builtin, or a path to a file",
                 s
             )),
         }
@@ -71,6 +78,7 @@ impl std::fmt::Display for TextSource {
             TextSource::Google10k => write!(f, "google"),
             TextSource::SystemDict => write!(f, "system"),
             TextSource::Builtin => write!(f, "builtin"),
+            TextSource::File(path) => write!(f, "file:{}", path.display()),
         }
     }
 }
@@ -93,7 +101,7 @@ struct Args {
         short = 's',
         long,
         default_value = "google",
-        help = "Text source: google (top 10k words), system (/usr/share/dict/words), builtin (sample texts)"
+        help = "Text source: google (top 10k words), system (/usr/share/dict/words), builtin (sample texts), or path to a code file"
     )]
     text_source: TextSource,
 
@@ -227,30 +235,63 @@ impl App {
             self.current_key_start_time = Some(Instant::now());
         }
     }
+    
+    fn is_code_mode(&self) -> bool {
+        matches!(self.text_source, TextSource::File(_))
+    }
+    
+    fn skip_leading_whitespace(&mut self) {
+        if !self.is_code_mode() {
+            return;
+        }
+        
+        // Skip leading spaces and tabs at the current position
+        while self.current_position < self.target_chars.len() {
+            let ch = self.target_chars[self.current_position];
+            if ch == ' ' || ch == '\t' {
+                self.current_position += 1;
+            } else {
+                break;
+            }
+        }
+        
+        // Ensure user_input matches the skipped position
+        while self.user_input.len() < self.current_position {
+            let ch = self.target_chars[self.user_input.len()];
+            self.user_input.push(ch);
+        }
+    }
 
     fn calculate_required_text_length(&self) -> usize {
         // Calculate characters needed based on test duration and expected typing speed
         let test_duration = self.test_duration.as_secs_f64();
-        let words_per_sec = ASSUMED_AVG_WPM * 60.0;
+        let words_per_sec = ASSUMED_AVG_WPM / 60.0;
         let chars_needed =
             (words_per_sec * CHARS_PER_WORD * test_duration * TEXT_BUFFER_MULTIPLIER) as usize;
 
+        // For code mode, be more generous to ensure we don't run out
+        let multiplier = if self.is_code_mode() { 2.0 } else { 1.0 };
+        let adjusted_chars = (chars_needed as f64 * multiplier) as usize;
+
         // Ensure we have at least the minimum length
-        chars_needed.max(MIN_TEXT_LENGTH)
+        adjusted_chars.max(MIN_TEXT_LENGTH)
     }
 
     fn generate_text(&mut self) {
-        let text = match self.text_source {
+        let text = match &self.text_source {
             TextSource::Google10k => self.generate_google10k_text(),
             TextSource::SystemDict => self.generate_system_dict_text(),
             TextSource::Builtin => self.generate_builtin_text(),
+            TextSource::File(path) => self.generate_file_text(path),
         };
 
-        dbg!(&text.len());
         self.target_text = text;
         // Cache character vector for performance and initialize correction_attempts
         self.target_chars = self.target_text.chars().collect();
         self.correction_attempts = vec![false; self.target_chars.len()];
+        
+        // Skip leading whitespace at the beginning for code mode
+        self.skip_leading_whitespace();
     }
 
     fn generate_builtin_text(&self) -> String {
@@ -341,6 +382,164 @@ impl App {
         Ok(words)
     }
 
+    fn generate_file_text(&self, path: &PathBuf) -> String {
+        match fs::read_to_string(path) {
+            Ok(content) => {
+                let required_length = self.calculate_required_text_length();
+                self.extract_code_section(&content, required_length)
+            }
+            Err(e) => {
+                eprintln!(
+                    "Warning: Could not read file {}: {}. Using built-in texts.",
+                    path.display(),
+                    e
+                );
+                self.generate_builtin_text()
+            }
+        }
+    }
+
+    fn extract_code_section(&self, content: &str, required_length: usize) -> String {
+        // Extract meaningful code sections (functions, methods, etc.)
+        let mut sections = Vec::new();
+        let mut current_section = String::new();
+        let mut in_function = false;
+        let mut brace_count = 0;
+
+        for line in content.lines() {
+            let trimmed = line.trim();
+            let line_indent = line.chars().take_while(|&c| c == ' ' || c == '\t').count();
+
+            // Detect function/method start for various languages
+            if !in_function
+                && (trimmed.starts_with("fn ") ||         // Rust
+                trimmed.starts_with("def ") ||        // Python
+                trimmed.starts_with("function ") ||   // JavaScript
+                trimmed.starts_with("func ") ||       // Go
+                // Better OCaml function detection - must be at top level and have parameters or be recursive
+                (line_indent == 0 && trimmed.starts_with("let ") && 
+                 (trimmed.contains("(") || trimmed.starts_with("let rec "))) ||
+                trimmed.starts_with("public ") ||     // Java/C#
+                trimmed.starts_with("private ") ||    // Java/C#
+                trimmed.starts_with("protected ") ||  // Java/C#
+                trimmed.contains("fn(") ||            // Rust closures
+                trimmed.contains("=>") ||             // JS arrow functions
+                (trimmed.contains("(") && trimmed.contains(")") && trimmed.contains("{")))
+            {
+                in_function = true;
+                current_section.clear();
+            }
+
+            if in_function {
+                current_section.push_str(line);
+                current_section.push('\n');
+
+                // Track braces for languages that use them
+                brace_count += line.matches('{').count() as i32;
+                brace_count -= line.matches('}').count() as i32;
+
+                // Detect end of function for brace-based languages
+                if brace_count == 0 && line.contains('}') {
+                    if current_section.len() >= 100 {
+                        // Only keep meaningful sections
+                        sections.push(current_section.clone());
+                    }
+                    current_section.clear();
+                    in_function = false;
+                    brace_count = 0;
+                }
+
+                // For Python and OCaml, detect based on indentation and empty lines
+                if brace_count == 0 && (
+                    // Empty line after function content
+                    (trimmed.is_empty() && current_section.trim().len() >= 50) ||
+                    // Another top-level definition (at indent 0)
+                    (!trimmed.is_empty() && line_indent == 0 && 
+                     (trimmed.starts_with("let ") || trimmed.starts_with("def ") || 
+                      trimmed.starts_with("class ") || trimmed.starts_with("type ") ||
+                      trimmed.starts_with("module ") || trimmed.starts_with("(*")))
+                ) {
+                    if current_section.len() >= 50 {
+                        sections.push(current_section.clone());
+                    }
+                    current_section.clear();
+                    in_function = false;
+                    
+                    // If we hit another function definition, start processing it
+                    if !trimmed.is_empty() && line_indent == 0 && 
+                       trimmed.starts_with("let ") && 
+                       (trimmed.contains("(") || trimmed.starts_with("let rec ")) {
+                        in_function = true;
+                        current_section.push_str(line);
+                        current_section.push('\n');
+                    }
+                }
+            }
+        }
+
+        // Don't forget the last section
+        if in_function && current_section.len() >= 50 {
+            sections.push(current_section);
+        }
+
+        // If no functions found, fall back to using chunks of the file
+        if sections.is_empty() {
+            let lines: Vec<&str> = content.lines().collect();
+            let chunk_size = 15; // Lines per chunk
+
+            for chunk in lines.chunks(chunk_size) {
+                let section = chunk.join("\n");
+                if section.trim().len() >= 50 {
+                    sections.push(section);
+                }
+            }
+        }
+
+        if sections.is_empty() {
+            // If still no sections, just use the whole content
+            return content.chars().take(required_length).collect();
+        }
+
+        // Ensure we have enough content by combining/repeating sections as needed
+        let mut rng = rand::thread_rng();
+        let mut result = String::new();
+        let start_idx = rng.gen_range(0..sections.len());
+        let mut current_idx = start_idx;
+        let mut iterations = 0;
+        const MAX_ITERATIONS: usize = 100; // Prevent infinite loops
+        
+        while result.len() < required_length && iterations < MAX_ITERATIONS {
+            if !result.is_empty() {
+                result.push_str("\n\n"); // Add spacing between sections
+            }
+            
+            result.push_str(&sections[current_idx]);
+            
+            // Move to next section (cycle through all sections)
+            current_idx = (current_idx + 1) % sections.len();
+            iterations += 1;
+            
+            // If we've gone through all sections once and still need more content,
+            // continue cycling but add some randomization
+            if current_idx == start_idx && result.len() < required_length {
+                current_idx = rng.gen_range(0..sections.len());
+            }
+        }
+        
+        // If we somehow have too much content, truncate at a reasonable boundary
+        if result.len() > required_length * 2 {
+            // Try to truncate at a line boundary
+            let truncated = result.chars().take(required_length).collect::<String>();
+            if let Some(last_newline) = truncated.rfind('\n') {
+                truncated[..last_newline].to_string()
+            } else {
+                truncated
+            }
+        } else {
+            result
+        }
+    }
+
     fn handle_key_event(&mut self, key: KeyCode) {
         if self.is_finished {
             return;
@@ -355,6 +554,73 @@ impl App {
         let now = Instant::now();
 
         match key {
+            KeyCode::Enter => {
+                // Handle Enter key for newlines in code mode
+                if self.current_position < self.target_chars.len() {
+                    let target_char = self.target_chars[self.current_position];
+                    
+                    if target_char == '\n' {
+                        // Record timing data for the newline
+                        if let Some(key_start_time) = self.current_key_start_time {
+                            let key_response_time = now.duration_since(key_start_time);
+                            self.key_metrics
+                                .entry(target_char)
+                                .or_insert_with(KeyMetrics::new)
+                                .times
+                                .push(key_response_time);
+                        }
+                        
+                        if self.require_correction {
+                            // In correction mode, treat Enter like any correct character
+                            self.user_input.push('\n');
+                            self.total_keystrokes += 1;
+                            self.current_position += 1;
+                            
+                            // Skip leading whitespace after newline in code mode
+                            self.skip_leading_whitespace();
+                            
+                            self.start_timing_current_key();
+                            self.update_wpm();
+                        } else {
+                            // In normal mode
+                            self.user_input.push('\n');
+                            self.total_keystrokes += 1;
+                            self.current_position += 1;
+                            
+                            // Skip leading whitespace after newline in code mode
+                            self.skip_leading_whitespace();
+                            
+                            self.start_timing_current_key();
+                            self.update_wpm();
+                        }
+                        
+                        self.last_keystroke_time = Some(now);
+                        
+                        if self.current_position >= self.target_chars.len() {
+                            self.is_finished = true;
+                        }
+                    } else {
+                        // Wrong key - Enter pressed when not expecting newline
+                        if self.require_correction {
+                            self.errors += 1;
+                            self.total_keystrokes += 1;
+                            if self.current_position < self.correction_attempts.len() {
+                                self.correction_attempts[self.current_position] = true;
+                            }
+                        } else {
+                            // In normal mode, treat it as an error but continue
+                            self.user_input.push('\n'); // Show what was typed
+                            self.errors += 1;
+                            self.total_keystrokes += 1;
+                            if self.current_position < self.correction_attempts.len() {
+                                self.correction_attempts[self.current_position] = true;
+                            }
+                            self.current_position += 1;
+                            self.start_timing_current_key();
+                        }
+                    }
+                }
+            }
             KeyCode::Char(c) => {
                 if self.current_position < self.target_chars.len() {
                     let target_char = self.target_chars[self.current_position];
@@ -892,55 +1158,153 @@ fn render_typing_screen(f: &mut Frame, app: &App) {
         .alignment(ratatui::layout::Alignment::Center);
     f.render_widget(timer, chunks[0]);
 
-    // Text display - clean and minimal
-    let mut spans = Vec::new();
+    // Text display - handle multi-line code properly
     let chars = &app.target_chars;
     let user_chars: Vec<char> = app.user_input.chars().collect();
-
-    // Show text from beginning with fixed positioning - no scrolling
-    let visible_chars = VISIBLE_CHAR_LIMIT;
-    let end_pos = visible_chars.min(chars.len());
-
-    for i in 0..end_pos {
-        let target_char = chars[i];
-        let style = if i < user_chars.len() {
-            // Character has been typed - compare what was typed vs what should be typed
-            let typed_char = user_chars[i];
-            if typed_char == target_char {
-                // Correct character was typed
-                if i < app.correction_attempts.len() && app.correction_attempts[i] {
-                    // Correct but required correction attempts
-                    Style::default().fg(Color::Rgb(255, 165, 0)) // Orange
-                } else {
-                    // Correct on first try
-                    Style::default().fg(Color::Green)
-                }
-            } else {
-                // Wrong character was typed (only possible in normal mode)
-                Style::default().fg(Color::Red)
+    
+    // Check if we're in code mode (file source)
+    let is_code_mode = app.is_code_mode();
+    
+    if is_code_mode {
+        // Multi-line rendering for code
+        let mut lines: Vec<Line> = Vec::new();
+        let mut current_line_spans: Vec<Span> = Vec::new();
+        let mut char_idx = 0;
+        
+        // Find the current line number
+        let mut current_line_number: usize = 0;
+        for i in 0..app.current_position.min(chars.len()) {
+            if chars[i] == '\n' {
+                current_line_number += 1;
             }
-        } else if i == app.current_position {
-            // Current cursor position
-            Style::default().fg(Color::Black).bg(Color::White)
-        } else {
-            // Untyped characters
-            Style::default().fg(Color::DarkGray)
-        };
+        }
+        
+        // Calculate viewport - show lines around the current position
+        let viewport_height = chunks[2].height as usize;
+        let start_line = current_line_number.saturating_sub(viewport_height / 3);
+        
+        let mut line_count = 0;
+        
+        // Skip to the start line
+        for (i, &ch) in chars.iter().enumerate() {
+            if line_count >= start_line {
+                char_idx = i;
+                break;
+            }
+            if ch == '\n' {
+                line_count += 1;
+            }
+        }
+        
+        // Build lines for display
+        line_count = 0;
+        while char_idx < chars.len() && line_count < viewport_height {
+            let target_char = chars[char_idx];
+            
+            let style = if char_idx < user_chars.len() {
+                // Character has been typed
+                let typed_char = user_chars[char_idx];
+                if typed_char == target_char {
+                    if char_idx < app.correction_attempts.len() && app.correction_attempts[char_idx] {
+                        Style::default().fg(Color::Rgb(255, 165, 0)) // Orange
+                    } else {
+                        Style::default().fg(Color::Green)
+                    }
+                } else {
+                    Style::default().fg(Color::Red)
+                }
+            } else if char_idx < app.current_position {
+                // Auto-skipped leading whitespace - show as dimmed green
+                if target_char == ' ' || target_char == '\t' {
+                    Style::default().fg(Color::Rgb(100, 150, 100)) // Dimmed green
+                } else {
+                    Style::default().fg(Color::Green) // Should not happen but fallback
+                }
+            } else if char_idx == app.current_position {
+                Style::default().fg(Color::Black).bg(Color::White)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+            
+            if target_char == '\n' {
+                // Special handling for newlines - show a visible marker if it's the cursor position
+                if char_idx == app.current_position {
+                    current_line_spans.push(Span::styled("⏎", style));
+                }
+                lines.push(Line::from(current_line_spans.clone()));
+                current_line_spans.clear();
+                line_count += 1;
+            } else {
+                current_line_spans.push(Span::styled(target_char.to_string(), style));
+            }
+            
+            char_idx += 1;
+        }
+        
+        // Don't forget the last line
+        if !current_line_spans.is_empty() {
+            lines.push(Line::from(current_line_spans));
+        }
+        
+        let text_paragraph = Paragraph::new(lines)
+            .alignment(ratatui::layout::Alignment::Left)
+            .block(Block::default().borders(Borders::NONE));
+        f.render_widget(text_paragraph, chunks[2]);
+    } else {
+        // Single-line rendering for word mode (existing behavior)
+        let mut spans = Vec::new();
+        let visible_chars = VISIBLE_CHAR_LIMIT;
+        let end_pos = visible_chars.min(chars.len());
 
-        spans.push(Span::styled(target_char.to_string(), style));
+        for i in 0..end_pos {
+            let target_char = chars[i];
+            let style = if i < user_chars.len() {
+                let typed_char = user_chars[i];
+                if typed_char == target_char {
+                    if i < app.correction_attempts.len() && app.correction_attempts[i] {
+                        Style::default().fg(Color::Rgb(255, 165, 0))
+                    } else {
+                        Style::default().fg(Color::Green)
+                    }
+                } else {
+                    Style::default().fg(Color::Red)
+                }
+            } else if i == app.current_position {
+                Style::default().fg(Color::Black).bg(Color::White)
+            } else {
+                Style::default().fg(Color::DarkGray)
+            };
+
+            spans.push(Span::styled(target_char.to_string(), style));
+        }
+
+        let text_paragraph = Paragraph::new(Line::from(spans))
+            .wrap(ratatui::widgets::Wrap { trim: true })
+            .alignment(ratatui::layout::Alignment::Left);
+        f.render_widget(text_paragraph, chunks[2]);
     }
 
-    let text_paragraph = Paragraph::new(Line::from(spans))
-        .wrap(ratatui::widgets::Wrap { trim: true })
-        .alignment(ratatui::layout::Alignment::Left);
-    f.render_widget(text_paragraph, chunks[2]);
-
-    // Simple stats line
-    let stats_text = format!(
-        "WPM: {:.0} | Accuracy: {:.0}%",
-        app.get_current_wpm(),
-        app.get_accuracy()
-    );
+    // Simple stats line with progress indicator
+    let progress = if app.target_chars.is_empty() {
+        0.0
+    } else {
+        (app.current_position as f64 / app.target_chars.len() as f64) * 100.0
+    };
+    
+    let stats_text = if is_code_mode {
+        format!(
+            "WPM: {:.0} | Accuracy: {:.0}% | Progress: {:.0}%",
+            app.get_current_wpm(),
+            app.get_accuracy(),
+            progress
+        )
+    } else {
+        format!(
+            "WPM: {:.0} | Accuracy: {:.0}%",
+            app.get_current_wpm(),
+            app.get_accuracy()
+        )
+    };
     let stats = Paragraph::new(stats_text)
         .style(Style::default().fg(Color::Cyan))
         .alignment(ratatui::layout::Alignment::Center);
