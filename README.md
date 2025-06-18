@@ -111,7 +111,7 @@ Test results are automatically saved to `~/.ratatype_history.csv` with:
 - **Type** to take the test
 - **Backspace** to correct mistakes
 - **Enter** to match newlines in code mode, or restart after test completion
-- **ESC** to quit
+- **ESC** or **Ctrl+C** to quit
 
 ## Requirements
 

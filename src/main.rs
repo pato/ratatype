@@ -1,6 +1,6 @@
 use clap::Parser;
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEventKind, KeyModifiers},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -1080,6 +1080,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                     if key.kind == KeyEventKind::Press {
                         match key.code {
                             KeyCode::Esc => return Ok(()),
+                            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
                             _ => app.handle_key_event(key.code),
                         }
                     }
@@ -1111,6 +1112,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                     if key.kind == KeyEventKind::Press {
                         match key.code {
                             KeyCode::Esc => return Ok(()),
+                            KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
                             KeyCode::Enter => {
                                 app.restart();
                                 break; // Return to main typing loop
